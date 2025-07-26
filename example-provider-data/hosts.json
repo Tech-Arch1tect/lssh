@@ -1,0 +1,23 @@
+[
+  {
+    "name": "web-server-01",
+    "hostname": "web01.example.com",
+    "port": 22,
+    "user": "deploy"
+  },
+  {
+    "name": "db-server-01",
+    "hostname": "db01.example.com",
+    "port": 2222,
+    "user": "admin"
+  },
+  {
+    "name": "dev-box",
+    "hostname": "dev.example.com",
+    "user": "developer"
+  },
+  {
+    "name": "local-server",
+    "hostname": "localhost"
+  }
+]
