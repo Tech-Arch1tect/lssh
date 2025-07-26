@@ -1,23 +1,64 @@
 [
   {
-    "name": "web-server-01",
-    "hostname": "web01.example.com",
-    "port": 22,
-    "user": "deploy"
+    "name": "Production",
+    "description": "Production environment servers",
+    "hosts": [
+      {
+        "name": "web-01",
+        "hostname": "web01.prod.example.com",
+        "port": 22,
+        "user": "deploy"
+      },
+      {
+        "name": "web-02",
+        "hostname": "web02.prod.example.com",
+        "port": 22,
+        "user": "deploy"
+      },
+      {
+        "name": "db-primary",
+        "hostname": "db01.prod.example.com",
+        "port": 2222,
+        "user": "admin"
+      }
+    ]
   },
   {
-    "name": "db-server-01",
-    "hostname": "db01.example.com",
-    "port": 2222,
-    "user": "admin"
+    "name": "Development",
+    "description": "Development and testing servers",
+    "hosts": [
+      {
+        "name": "dev-web",
+        "hostname": "dev.example.com",
+        "user": "developer"
+      },
+      {
+        "name": "test-db",
+        "hostname": "test-db.example.com",
+        "port": 3306,
+        "user": "testuser"
+      }
+    ]
   },
   {
-    "name": "dev-box",
-    "hostname": "dev.example.com",
-    "user": "developer"
-  },
-  {
-    "name": "local-server",
-    "hostname": "localhost"
+    "name": "Infrastructure",
+    "description": "Infrastructure and monitoring servers",
+    "hosts": [
+      {
+        "name": "monitoring",
+        "hostname": "monitor.example.com",
+        "user": "ops"
+      },
+      {
+        "name": "backup-server",
+        "hostname": "backup.example.com",
+        "port": 2222
+      },
+      {
+        "name": "jump-host",
+        "hostname": "jump.example.com",
+        "user": "admin"
+      }
+    ]
   }
 ]

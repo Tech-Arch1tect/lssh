@@ -8,7 +8,7 @@ import (
 
 type Provider interface {
 	Name() string
-	GetHosts(ctx context.Context) ([]*types.Host, error)
+	GetGroups(ctx context.Context) ([]*types.Group, error)
 }
 
 type Config struct {

@@ -25,16 +25,16 @@ func (p *JSONProvider) Name() string {
 	return p.name
 }
 
-func (p *JSONProvider) GetHosts(ctx context.Context) ([]*types.Host, error) {
+func (p *JSONProvider) GetGroups(ctx context.Context) ([]*types.Group, error) {
 	data, err := os.ReadFile(p.filepath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read JSON file %s: %w", p.filepath, err)
 	}
 
-	var hosts []*types.Host
-	if err := json.Unmarshal(data, &hosts); err != nil {
+	var groups []*types.Group
+	if err := json.Unmarshal(data, &groups); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON file %s: %w", p.filepath, err)
 	}
 
-	return hosts, nil
+	return groups, nil
 }
