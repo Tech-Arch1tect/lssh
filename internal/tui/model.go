@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/user"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,6 +27,25 @@ var (
 				Bold(true)
 
 	helpStyle = lipgloss.NewStyle().PaddingLeft(4).Foreground(lipgloss.Color("241"))
+
+	detailsPanelStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("238")).
+				Padding(1, 2).
+				MarginLeft(2)
+
+	detailsHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FAFAFA")).
+				Background(lipgloss.Color("#5A56E0")).
+				Padding(0, 1)
+
+	detailsLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("170"))
+
+	detailsValueStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252"))
 )
 
 type ViewMode int
@@ -108,6 +128,11 @@ func (m Model) loadData() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.terminalWidth = msg.Width
+		m.terminalHeight = msg.Height
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.filterMode {
 			return m.handleFilterInput(msg)
@@ -478,6 +503,9 @@ func (m Model) View() string {
 }
 
 func (m Model) renderGridView(header string, hosts []*types.Host, groups []*types.Group) string {
+	detailsPanelWidth := 40
+	availableWidth := m.terminalWidth - detailsPanelWidth - 6
+
 	s := header
 
 	var items []string
@@ -496,18 +524,62 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 		}
 	}
 
+	var gridContent string
 	if itemCount == 0 {
-		s += "No items available.\n"
-		s += helpStyle.Render(m.getHelpText())
-		return s
+		gridContent = "No items available.\n"
+	} else {
+		gridContent = m.renderGrid(items, itemCount, availableWidth)
 	}
 
-	rows, cols := m.getGridDimensions()
-	colWidths := m.calculateColumnWidths(items, rows, cols)
+	detailsContent := m.renderHostDetails(m.getCurrentHost())
 
+	gridLines := strings.Split(strings.TrimRight(gridContent, "\n"), "\n")
+	detailsLines := strings.Split(strings.TrimRight(detailsContent, "\n"), "\n")
+
+	maxLines := len(gridLines)
+	if len(detailsLines) > maxLines {
+		maxLines = len(detailsLines)
+	}
+
+	for i := 0; i < maxLines; i++ {
+		var gridLine, detailsLine string
+
+		if i < len(gridLines) {
+			gridLine = gridLines[i]
+		}
+		if i < len(detailsLines) {
+			detailsLine = detailsLines[i]
+		}
+
+		gridLineWidth := lipgloss.Width(gridLine)
+		padding := availableWidth - gridLineWidth
+		if padding < 0 {
+			padding = 0
+		}
+
+		s += gridLine + strings.Repeat(" ", padding) + "  " + detailsLine + "\n"
+	}
+
+	s += "\n" + helpStyle.Render(m.getHelpText())
+	return s
+}
+
+func (m Model) renderGrid(items []string, itemCount, availableWidth int) string {
+	adjustedGridCols := m.gridCols
+	if availableWidth < 120 {
+		adjustedGridCols = 2
+	}
+	if availableWidth < 80 {
+		adjustedGridCols = 1
+	}
+
+	rows := (itemCount + adjustedGridCols - 1) / adjustedGridCols
+	colWidths := m.calculateColumnWidths(items, rows, adjustedGridCols, availableWidth)
+
+	var content string
 	for row := 0; row < rows; row++ {
-		for col := 0; col < cols; col++ {
-			index := row*cols + col
+		for col := 0; col < adjustedGridCols; col++ {
+			index := row*adjustedGridCols + col
 			if index >= itemCount {
 				break
 			}
@@ -535,20 +607,19 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 				styledText = itemStyle.Render(displayText)
 			}
 
-			s += styledText
+			content += styledText
 
-			if col < cols-1 && index+1 < itemCount {
-				s += strings.Repeat(" ", padding+2)
+			if col < adjustedGridCols-1 && index+1 < itemCount {
+				content += strings.Repeat(" ", padding+2)
 			}
 		}
-		s += "\n"
+		content += "\n"
 	}
 
-	s += "\n" + helpStyle.Render(m.getHelpText())
-	return s
+	return content
 }
 
-func (m Model) calculateColumnWidths(items []string, rows, cols int) []int {
+func (m Model) calculateColumnWidths(items []string, rows, cols, maxWidth int) []int {
 	if len(items) == 0 || cols == 0 {
 		return nil
 	}
@@ -565,6 +636,20 @@ func (m Model) calculateColumnWidths(items []string, rows, cols int) []int {
 			itemWidth := len(items[index]) + 2
 			if itemWidth > colWidths[col] {
 				colWidths[col] = itemWidth
+			}
+		}
+	}
+
+	totalWidth := 0
+	for _, width := range colWidths {
+		totalWidth += width
+	}
+
+	if totalWidth > maxWidth && cols > 1 {
+		availablePerCol := maxWidth / cols
+		for i := range colWidths {
+			if colWidths[i] > availablePerCol {
+				colWidths[i] = availablePerCol
 			}
 		}
 	}
@@ -591,4 +676,55 @@ func (m Model) getHelpText() string {
 
 func (m Model) Choice() *types.Host {
 	return m.choice
+}
+
+func (m Model) getCurrentHost() *types.Host {
+	currentIndex := m.getCurrentIndex()
+	var hosts []*types.Host
+
+	switch m.viewMode {
+	case AllHostsView:
+		hosts = m.filteredHosts
+	case HostView:
+		hosts = m.getFilteredGroupHosts()
+	case GroupView:
+		return nil
+	}
+
+	if len(hosts) > 0 && currentIndex < len(hosts) {
+		return hosts[currentIndex]
+	}
+	return nil
+}
+
+func (m Model) renderHostDetails(host *types.Host) string {
+	if host == nil {
+		return detailsPanelStyle.Render("No host selected")
+	}
+
+	content := detailsHeaderStyle.Render("Connection Details") + "\n\n"
+
+	content += detailsLabelStyle.Render("Name: ") + detailsValueStyle.Render(host.Name) + "\n"
+	content += detailsLabelStyle.Render("Hostname: ") + detailsValueStyle.Render(host.Hostname) + "\n"
+
+	port := "22"
+	if host.Port > 0 {
+		port = fmt.Sprintf("%d", host.Port)
+	}
+	content += detailsLabelStyle.Render("Port: ") + detailsValueStyle.Render(port) + "\n"
+
+	username := host.User
+	if username == "" {
+		if currentUser, err := user.Current(); err == nil {
+			username = currentUser.Username + " (current user)"
+		} else {
+			username = "(current user)"
+		}
+	}
+	content += detailsLabelStyle.Render("User: ") + detailsValueStyle.Render(username) + "\n\n"
+
+	content += detailsLabelStyle.Render("SSH Command:") + "\n"
+	content += detailsValueStyle.Render(host.SSHCommand())
+
+	return detailsPanelStyle.Render(content)
 }
