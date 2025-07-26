@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tech-arch1tect/lssh/internal/provider"
 )
@@ -48,10 +49,12 @@ func getConfigPath() string {
 
 func getDefaultConfig() *Config {
 	hostsFile := getDefaultHostsFile()
+	providerType := getProviderType(hostsFile)
+
 	return &Config{
 		Providers: []provider.Config{
 			{
-				Type: "json",
+				Type: providerType,
 				Name: "default",
 				Config: map[string]interface{}{
 					"file": hostsFile,
@@ -79,4 +82,20 @@ func getDefaultHostsFile() string {
 	}
 
 	return "./hosts.json"
+}
+
+func getProviderType(filePath string) string {
+	if envType := os.Getenv("LSSH_PROVIDER_TYPE"); envType != "" {
+		return envType
+	}
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".yml", ".yaml":
+		return "ansible"
+	case ".json":
+		return "json"
+	default:
+		return "json"
+	}
 }
