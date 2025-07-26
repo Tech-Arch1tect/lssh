@@ -150,7 +150,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.moveDown()
 
 		case "left", "h":
-			if m.viewMode == HostView {
+			if m.viewMode == HostView && m.cursorCol == 0 {
 				return m.backToGroups()
 			}
 			return m.moveLeft()
