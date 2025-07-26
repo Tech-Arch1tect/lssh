@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -36,18 +37,26 @@ const (
 )
 
 type Model struct {
-	providers    []provider.Provider
-	groups       []*types.Group
-	hosts        []*types.Host
-	currentGroup *types.Group
-	viewMode     ViewMode
-	cursor       int
-	selected     map[int]struct{}
-	choice       *types.Host
-	err          error
-	quitting     bool
-	loading      bool
-	breadcrumb   []string
+	providers      []provider.Provider
+	groups         []*types.Group
+	hosts          []*types.Host
+	filteredHosts  []*types.Host
+	filteredGroups []*types.Group
+	currentGroup   *types.Group
+	viewMode       ViewMode
+	cursorRow      int
+	cursorCol      int
+	gridCols       int
+	terminalWidth  int
+	terminalHeight int
+	selected       map[int]struct{}
+	choice         *types.Host
+	err            error
+	quitting       bool
+	loading        bool
+	breadcrumb     []string
+	filterMode     bool
+	filterText     string
 }
 
 type dataLoadedMsg struct {
@@ -58,11 +67,16 @@ type dataLoadedMsg struct {
 
 func NewModel(providers []provider.Provider) Model {
 	return Model{
-		providers:  providers,
-		selected:   make(map[int]struct{}),
-		loading:    true,
-		viewMode:   AllHostsView,
-		breadcrumb: []string{"All Hosts"},
+		providers:      providers,
+		selected:       make(map[int]struct{}),
+		loading:        true,
+		viewMode:       AllHostsView,
+		breadcrumb:     []string{"All Hosts"},
+		gridCols:       3,
+		terminalWidth:  80,
+		terminalHeight: 24,
+		filterMode:     false,
+		filterText:     "",
 	}
 }
 
@@ -95,21 +109,29 @@ func (m Model) loadData() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.filterMode {
+			return m.handleFilterInput(msg)
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
 			return m, tea.Quit
 
 		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
+			return m.moveUp()
 
 		case "down", "j":
-			maxItems := m.getMaxCursor()
-			if m.cursor < maxItems-1 {
-				m.cursor++
+			return m.moveDown()
+
+		case "left", "h":
+			if m.viewMode == HostView {
+				return m.backToGroups()
 			}
+			return m.moveLeft()
+
+		case "right", "l":
+			return m.moveRight()
 
 		case "enter", " ":
 			if m.viewMode == GroupView {
@@ -118,13 +140,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.selectHost()
 			}
 
-		case "backspace", "h":
+		case "backspace":
 			if m.viewMode == HostView {
 				return m.backToGroups()
 			}
 
 		case "tab":
 			return m.switchView()
+
+		case "/":
+			m.filterMode = true
+			return m, nil
+
+		case "esc":
+			if m.filterText != "" {
+				m.filterText = ""
+				m.updateFilteredData()
+				return m, nil
+			}
 		}
 
 	case dataLoadedMsg:
@@ -132,8 +165,182 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.groups = msg.groups
 		m.hosts = msg.hosts
 		m.err = msg.err
+		m.updateFilteredData()
 	}
 
+	return m, nil
+}
+
+func (m *Model) updateFilteredData() {
+	if m.filterText == "" {
+		m.filteredHosts = m.hosts
+		m.filteredGroups = m.groups
+		return
+	}
+
+	filterLower := strings.ToLower(m.filterText)
+
+	m.filteredHosts = nil
+	for _, host := range m.hosts {
+		if strings.Contains(strings.ToLower(host.Name), filterLower) ||
+			strings.Contains(strings.ToLower(host.Hostname), filterLower) {
+			m.filteredHosts = append(m.filteredHosts, host)
+		}
+	}
+
+	m.filteredGroups = nil
+	for _, group := range m.groups {
+		hasMatchingHost := false
+		for _, host := range group.AllHosts() {
+			if strings.Contains(strings.ToLower(host.Name), filterLower) ||
+				strings.Contains(strings.ToLower(host.Hostname), filterLower) {
+				hasMatchingHost = true
+				break
+			}
+		}
+		if hasMatchingHost || strings.Contains(strings.ToLower(group.Name), filterLower) {
+			m.filteredGroups = append(m.filteredGroups, group)
+		}
+	}
+
+	m.resetCursor()
+}
+
+func (m *Model) resetCursor() {
+	m.cursorRow = 0
+	m.cursorCol = 0
+}
+
+func (m Model) getCurrentItems() interface{} {
+	switch m.viewMode {
+	case AllHostsView:
+		if m.currentGroup != nil {
+			return m.getFilteredGroupHosts()
+		}
+		return m.filteredHosts
+	case GroupView:
+		return m.filteredGroups
+	case HostView:
+		return m.getFilteredGroupHosts()
+	default:
+		return nil
+	}
+}
+
+func (m Model) getFilteredGroupHosts() []*types.Host {
+	if m.currentGroup == nil {
+		return nil
+	}
+
+	if m.filterText == "" {
+		return m.currentGroup.Hosts
+	}
+
+	filterLower := strings.ToLower(m.filterText)
+	var filtered []*types.Host
+	for _, host := range m.currentGroup.Hosts {
+		if strings.Contains(strings.ToLower(host.Name), filterLower) ||
+			strings.Contains(strings.ToLower(host.Hostname), filterLower) {
+			filtered = append(filtered, host)
+		}
+	}
+	return filtered
+}
+
+func (m Model) getCurrentItemCount() int {
+	items := m.getCurrentItems()
+	switch v := items.(type) {
+	case []*types.Host:
+		return len(v)
+	case []*types.Group:
+		return len(v)
+	default:
+		return 0
+	}
+}
+
+func (m Model) getGridDimensions() (rows, cols int) {
+	itemCount := m.getCurrentItemCount()
+	if itemCount == 0 {
+		return 0, 0
+	}
+
+	cols = m.gridCols
+	if cols <= 0 {
+		cols = 1
+	}
+
+	rows = (itemCount + cols - 1) / cols
+	return rows, cols
+}
+
+func (m Model) getCurrentIndex() int {
+	_, cols := m.getGridDimensions()
+	if cols <= 0 {
+		return 0
+	}
+	return m.cursorRow*cols + m.cursorCol
+}
+
+func (m Model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.filterMode = false
+		m.updateFilteredData()
+		return m, nil
+	case "esc":
+		m.filterMode = false
+		return m, nil
+	case "backspace":
+		if len(m.filterText) > 0 {
+			m.filterText = m.filterText[:len(m.filterText)-1]
+			m.updateFilteredData()
+		}
+		return m, nil
+	default:
+		if len(msg.String()) == 1 {
+			m.filterText += msg.String()
+			m.updateFilteredData()
+		}
+		return m, nil
+	}
+}
+
+func (m Model) moveUp() (tea.Model, tea.Cmd) {
+	if m.cursorRow > 0 {
+		m.cursorRow--
+	}
+	return m, nil
+}
+
+func (m Model) moveDown() (tea.Model, tea.Cmd) {
+	rows, _ := m.getGridDimensions()
+	if m.cursorRow < rows-1 {
+		index := m.getCurrentIndex()
+		itemCount := m.getCurrentItemCount()
+		if index+m.gridCols < itemCount {
+			m.cursorRow++
+		}
+	}
+	return m, nil
+}
+
+func (m Model) moveLeft() (tea.Model, tea.Cmd) {
+	if m.cursorCol > 0 {
+		m.cursorCol--
+	}
+	return m, nil
+}
+
+func (m Model) moveRight() (tea.Model, tea.Cmd) {
+	_, cols := m.getGridDimensions()
+	if m.cursorCol < cols-1 {
+		index := m.getCurrentIndex()
+		itemCount := m.getCurrentItemCount()
+		if index+1 < itemCount {
+			m.cursorCol++
+		}
+	}
 	return m, nil
 }
 
@@ -154,33 +361,33 @@ func (m Model) getMaxCursor() int {
 }
 
 func (m Model) enterGroup() (tea.Model, tea.Cmd) {
-	if len(m.groups) == 0 || m.cursor >= len(m.groups) {
+	currentIndex := m.getCurrentIndex()
+	if len(m.filteredGroups) == 0 || currentIndex >= len(m.filteredGroups) {
 		return m, nil
 	}
 
-	selectedGroup := m.groups[m.cursor]
+	selectedGroup := m.filteredGroups[currentIndex]
 	m.currentGroup = selectedGroup
 	m.viewMode = HostView
-	m.cursor = 0
+	m.resetCursor()
 	m.breadcrumb = append(m.breadcrumb, selectedGroup.Name)
 
 	return m, nil
 }
 
 func (m Model) selectHost() (tea.Model, tea.Cmd) {
+	currentIndex := m.getCurrentIndex()
 	var hosts []*types.Host
 
 	switch m.viewMode {
 	case AllHostsView:
-		hosts = m.hosts
+		hosts = m.filteredHosts
 	case HostView:
-		if m.currentGroup != nil {
-			hosts = m.currentGroup.Hosts
-		}
+		hosts = m.getFilteredGroupHosts()
 	}
 
-	if len(hosts) > 0 && m.cursor < len(hosts) {
-		m.choice = hosts[m.cursor]
+	if len(hosts) > 0 && currentIndex < len(hosts) {
+		m.choice = hosts[currentIndex]
 		m.quitting = true
 		return m, tea.Quit
 	}
@@ -189,7 +396,7 @@ func (m Model) selectHost() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) switchView() (tea.Model, tea.Cmd) {
-	m.cursor = 0
+	m.resetCursor()
 
 	switch m.viewMode {
 	case AllHostsView:
@@ -219,7 +426,7 @@ func (m Model) backToGroups() (tea.Model, tea.Cmd) {
 		m.currentGroup = nil
 	}
 
-	m.cursor = 0
+	m.resetCursor()
 	return m, nil
 }
 
@@ -251,123 +458,135 @@ func (m Model) View() string {
 	}
 	s += helpStyle.Render(breadcrumbStr) + "\n\n"
 
+	if m.filterMode {
+		s += fmt.Sprintf("Filter: %s_\n\n", m.filterText)
+	} else if m.filterText != "" {
+		s += fmt.Sprintf("Filter: %s (Press Esc to clear)\n\n", m.filterText)
+	}
+
 	switch m.viewMode {
 	case AllHostsView:
-		return m.renderAllHostsView(s)
+		return m.renderGridView(s, m.filteredHosts, nil)
 	case GroupView:
-		return m.renderGroupView(s)
+		return m.renderGridView(s, nil, m.filteredGroups)
 	case HostView:
-		return m.renderHostView(s)
+		hosts := m.getFilteredGroupHosts()
+		return m.renderGridView(s, hosts, nil)
 	default:
 		return s + "Unknown view mode"
 	}
 }
 
-func (m Model) renderAllHostsView(header string) string {
+func (m Model) renderGridView(header string, hosts []*types.Host, groups []*types.Group) string {
 	s := header
 
-	if len(m.hosts) == 0 {
-		s += "No hosts available.\n"
-		s += helpStyle.Render("Press Tab to switch to group view, q to quit.")
+	var items []string
+	var itemCount int
+
+	if hosts != nil {
+		itemCount = len(hosts)
+		for _, host := range hosts {
+			items = append(items, fmt.Sprintf("%s (%s)", host.Name, host.Hostname))
+		}
+	} else if groups != nil {
+		itemCount = len(groups)
+		for _, group := range groups {
+			hostCount := len(group.AllHosts())
+			items = append(items, fmt.Sprintf("%s (%d hosts)", group.Name, hostCount))
+		}
+	}
+
+	if itemCount == 0 {
+		s += "No items available.\n"
+		s += helpStyle.Render(m.getHelpText())
 		return s
 	}
 
-	for i, host := range m.hosts {
-		cursor := " "
-		if m.cursor == i {
-			cursor = ">"
-		}
+	rows, cols := m.getGridDimensions()
+	colWidths := m.calculateColumnWidths(items, rows, cols)
 
-		style := itemStyle
-		if m.cursor == i {
-			style = selectedItemStyle
-		}
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			index := row*cols + col
+			if index >= itemCount {
+				break
+			}
 
-		hostLine := fmt.Sprintf("%s %s (%s)", cursor, host.Name, host.Hostname)
-		s += style.Render(hostLine) + "\n"
+			isSelected := (row == m.cursorRow && col == m.cursorCol)
+			rawText := items[index]
+
+			var displayText string
+			if isSelected {
+				displayText = "► " + rawText
+			} else {
+				displayText = "  " + rawText
+			}
+
+			contentWidth := len(rawText) + 2
+			padding := colWidths[col] - contentWidth
+			if padding < 0 {
+				padding = 0
+			}
+
+			var styledText string
+			if isSelected {
+				styledText = selectedItemStyle.Render(displayText)
+			} else {
+				styledText = itemStyle.Render(displayText)
+			}
+
+			s += styledText
+
+			if col < cols-1 && index+1 < itemCount {
+				s += strings.Repeat(" ", padding+2)
+			}
+		}
+		s += "\n"
 	}
 
-	s += "\n" + helpStyle.Render("Press ↑/↓ to navigate, Enter to connect, Tab to switch to group view, q to quit.")
+	s += "\n" + helpStyle.Render(m.getHelpText())
 	return s
 }
 
-func (m Model) renderGroupView(header string) string {
-	s := header
-
-	if len(m.groups) == 0 {
-		s += "No groups available.\n"
-		s += helpStyle.Render("Press q to quit.")
-		return s
+func (m Model) calculateColumnWidths(items []string, rows, cols int) []int {
+	if len(items) == 0 || cols == 0 {
+		return nil
 	}
 
-	for i, group := range m.groups {
-		cursor := " "
-		if m.cursor == i {
-			cursor = ">"
-		}
+	colWidths := make([]int, cols)
 
-		style := itemStyle
-		if m.cursor == i {
-			style = selectedItemStyle
-		}
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			index := row*cols + col
+			if index >= len(items) {
+				break
+			}
 
-		hostCount := len(group.AllHosts())
-		groupLine := fmt.Sprintf("%s %s (%d hosts)", cursor, group.Name, hostCount)
-		if group.Description != "" {
-			groupLine += fmt.Sprintf(" - %s", group.Description)
+			itemWidth := len(items[index]) + 2
+			if itemWidth > colWidths[col] {
+				colWidths[col] = itemWidth
+			}
 		}
-
-		s += style.Render(groupLine) + "\n"
 	}
 
-	s += "\n" + helpStyle.Render("Press ↑/↓ to navigate, Enter to enter group, Tab to switch to all hosts, q to quit.")
-	return s
+	return colWidths
 }
 
-func (m Model) renderHostView(header string) string {
-	s := header
+func (m Model) getHelpText() string {
+	baseHelp := "↑↓←→/hjkl: navigate, Enter: select"
 
-	var hosts []*types.Host
-	if m.currentGroup != nil {
-		hosts = m.currentGroup.Hosts
-	} else {
-		hosts = m.hosts
+	if m.viewMode == HostView && len(m.breadcrumb) > 1 {
+		baseHelp += ", Backspace: back"
 	}
 
-	if len(hosts) == 0 {
-		s += "No hosts available in this group.\n"
-		if m.viewMode == HostView && len(m.breadcrumb) > 1 {
-			s += helpStyle.Render("Press h/backspace to go back, q to quit.")
-		} else {
-			s += helpStyle.Render("Press q to quit.")
-		}
-		return s
+	baseHelp += ", Tab: switch view, /: filter"
+
+	if m.filterText != "" {
+		baseHelp += ", Esc: clear filter"
 	}
 
-	for i, host := range hosts {
-		cursor := " "
-		if m.cursor == i {
-			cursor = ">"
-		}
-
-		style := itemStyle
-		if m.cursor == i {
-			style = selectedItemStyle
-		}
-
-		hostLine := fmt.Sprintf("%s %s (%s)", cursor, host.Name, host.Hostname)
-
-		s += style.Render(hostLine) + "\n"
-	}
-
-	helpText := "Press ↑/↓ to navigate, Enter to connect"
-	if len(m.breadcrumb) > 1 {
-		helpText += ", h/backspace to go back"
-	}
-	helpText += ", Tab to switch to all hosts, q to quit."
-
-	s += "\n" + helpStyle.Render(helpText)
-	return s
+	baseHelp += ", q: quit"
+	return baseHelp
 }
 
 func (m Model) Choice() *types.Host {
