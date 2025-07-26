@@ -1,0 +1,36 @@
+all:
+  vars:
+    ansible_ssh_private_key_file: ~/.ssh/id_rsa
+  children:
+    production:
+      hosts:
+        web-01:
+          ansible_host: web01.prod.example.com
+          ansible_user: deploy
+          ansible_port: 2222
+        web-02:
+          ansible_host: web02.prod.example.com
+          ansible_user: deploy
+        db-primary:
+          ansible_host: db01.prod.example.com
+          ansible_user: admin
+          ansible_port: 2222
+    development:
+      hosts:
+        dev-web:
+          ansible_host: dev.example.com
+          ansible_user: developer
+        test-db:
+          ansible_host: test-db.example.com
+          ansible_user: testuser
+          ansible_port: 3306
+    infrastructure:
+      hosts:
+        monitoring:
+          ansible_host: monitor.example.com
+          ansible_user: ops
+        backup-server:
+          ansible_host: backup.example.com
+        jump-host:
+          ansible_host: jump.example.com
+          ansible_user: admin

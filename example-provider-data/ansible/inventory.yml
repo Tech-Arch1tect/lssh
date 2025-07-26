@@ -1,0 +1,16 @@
+all:
+  children:
+    production:
+      hosts:
+        web-01:
+        web-02:
+        db-primary:
+    development:
+      hosts:
+        dev-web:
+        test-db:
+    infrastructure:
+      hosts:
+        monitoring:
+        backup-server:
+        jump-host:

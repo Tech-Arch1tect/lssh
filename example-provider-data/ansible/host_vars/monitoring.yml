@@ -1,0 +1,3 @@
+ansible_host: monitor.example.com
+ansible_user: monitoring_admin
+backup_enabled: true
