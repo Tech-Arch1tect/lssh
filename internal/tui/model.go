@@ -860,9 +860,6 @@ func (m Model) View() string {
 }
 
 func (m Model) renderGridView(header string, hosts []*types.Host, groups []*types.Group) string {
-	detailsPanelWidth := 40
-	availableWidth := m.terminalWidth - detailsPanelWidth - 6
-
 	s := header
 
 	var items []string
@@ -889,40 +886,22 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 		}
 	}
 
+	currentHost := m.getCurrentHost()
+	detailsPanelWidth := m.getDetailsPanelWidth(currentHost)
+	availableWidth := m.terminalWidth - detailsPanelWidth - 6
+
 	var gridContent string
 	if itemCount == 0 {
-		gridContent = "No items available.\n"
+		gridContent = "No items available."
 	} else {
-		gridContent = m.renderGrid(items, itemCount, availableWidth)
+		gridContent = strings.TrimRight(m.renderGrid(items, itemCount, availableWidth), "\n")
 	}
 
-	detailsContent := m.renderHostDetails(m.getCurrentHost())
-
-	gridLines := strings.Split(strings.TrimRight(gridContent, "\n"), "\n")
-	detailsLines := strings.Split(strings.TrimRight(detailsContent, "\n"), "\n")
-
-	maxLines := len(gridLines)
-	if len(detailsLines) > maxLines {
-		maxLines = len(detailsLines)
-	}
-
-	for i := 0; i < maxLines; i++ {
-		var gridLine, detailsLine string
-
-		if i < len(gridLines) {
-			gridLine = gridLines[i]
-		}
-		if i < len(detailsLines) {
-			detailsLine = detailsLines[i]
-		}
-
-		gridLineWidth := lipgloss.Width(gridLine)
-		padding := availableWidth - gridLineWidth
-		if padding < 0 {
-			padding = 0
-		}
-
-		s += gridLine + strings.Repeat(" ", padding) + "  " + detailsLine + "\n"
+	if currentHost == nil {
+		s += gridContent + "\n"
+	} else {
+		detailsContent := strings.TrimRight(m.renderHostDetails(currentHost), "\n")
+		s += m.renderSideBySide(gridContent, detailsContent, availableWidth)
 	}
 
 	s += "\n" + helpStyle.Render(m.getHelpText())
@@ -930,13 +909,7 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 }
 
 func (m Model) renderGrid(items []string, itemCount, availableWidth int) string {
-	adjustedGridCols := m.gridCols
-	if availableWidth < 120 {
-		adjustedGridCols = 2
-	}
-	if availableWidth < 80 {
-		adjustedGridCols = 1
-	}
+	adjustedGridCols := m.calculateOptimalColumns(items, availableWidth)
 
 	rows := (itemCount + adjustedGridCols - 1) / adjustedGridCols
 	colWidths := m.calculateColumnWidths(items, rows, adjustedGridCols, availableWidth)
@@ -982,6 +955,36 @@ func (m Model) renderGrid(items []string, itemCount, availableWidth int) string 
 	}
 
 	return content
+}
+
+func (m Model) calculateOptimalColumns(items []string, availableWidth int) int {
+	if len(items) == 0 || availableWidth < 30 {
+		return 1
+	}
+
+	maxItemWidth := 0
+	for _, item := range items {
+		itemWidth := len(item) + 4
+		if itemWidth > maxItemWidth {
+			maxItemWidth = itemWidth
+		}
+	}
+
+	optimalCols := availableWidth / maxItemWidth
+	if optimalCols < 1 {
+		optimalCols = 1
+	} else if optimalCols > 5 {
+		optimalCols = 5
+	}
+
+	if availableWidth < 120 && optimalCols > 2 {
+		optimalCols = 2
+	}
+	if availableWidth < 80 {
+		optimalCols = 1
+	}
+
+	return optimalCols
 }
 
 func (m Model) calculateColumnWidths(items []string, rows, cols, maxWidth int) []int {
@@ -1083,13 +1086,54 @@ func (m Model) getCurrentHost() *types.Host {
 	return nil
 }
 
+func (m Model) getDetailsPanelWidth(host *types.Host) int {
+	if host == nil {
+		return 0
+	}
+	if m.terminalWidth > 120 {
+		return 45
+	}
+	return 35
+}
+
+func (m Model) renderSideBySide(gridContent, detailsContent string, availableWidth int) string {
+	gridLines := strings.Split(gridContent, "\n")
+	detailsLines := strings.Split(detailsContent, "\n")
+
+	maxLines := len(gridLines)
+	if len(detailsLines) > maxLines {
+		maxLines = len(detailsLines)
+	}
+
+	var result string
+	for i := 0; i < maxLines; i++ {
+		var gridLine, detailsLine string
+
+		if i < len(gridLines) {
+			gridLine = gridLines[i]
+		}
+		if i < len(detailsLines) {
+			detailsLine = detailsLines[i]
+		}
+
+		gridLineWidth := lipgloss.Width(gridLine)
+		padding := availableWidth - gridLineWidth
+		if padding < 0 {
+			padding = 0
+		}
+
+		result += gridLine + strings.Repeat(" ", padding) + "  " + detailsLine + "\n"
+	}
+
+	return result
+}
+
 func (m Model) renderHostDetails(host *types.Host) string {
 	if host == nil {
 		return detailsPanelStyle.Render("No host selected")
 	}
 
 	content := detailsHeaderStyle.Render("Connection Details") + "\n\n"
-
 	content += detailsLabelStyle.Render("Name: ") + detailsValueStyle.Render(host.Name) + "\n"
 	content += detailsLabelStyle.Render("Hostname: ") + detailsValueStyle.Render(host.Hostname) + "\n"
 
@@ -1102,9 +1146,9 @@ func (m Model) renderHostDetails(host *types.Host) string {
 	username := host.User
 	if username == "" {
 		if currentUser, err := user.Current(); err == nil {
-			username = currentUser.Username + " (current user)"
+			username = currentUser.Username
 		} else {
-			username = "(current user)"
+			username = "current"
 		}
 	}
 	content += detailsLabelStyle.Render("User: ") + detailsValueStyle.Render(username) + "\n\n"
