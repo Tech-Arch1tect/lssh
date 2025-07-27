@@ -5,13 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
-	"syscall"
 
 	"github.com/tech-arch1tect/lssh/pkg/types"
 )
 
 func Connect(host *types.Host) error {
-	args := []string{"ssh"}
+	args := []string{}
 
 	if host.Port > 0 && host.Port != 22 {
 		args = append(args, "-p", fmt.Sprintf("%d", host.Port))
@@ -28,16 +27,14 @@ func Connect(host *types.Host) error {
 	target := fmt.Sprintf("%s@%s", username, host.Hostname)
 	args = append(args, target)
 
-	sshPath, err := exec.LookPath("ssh")
-	if err != nil {
-		return fmt.Errorf("ssh command not found: %w", err)
-	}
+	cmd := exec.Command("ssh", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	env := os.Environ()
-	err = syscall.Exec(sshPath, args, env)
+	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("failed to execute ssh: %w", err)
+		return fmt.Errorf("ssh connection failed: %w", err)
 	}
-
 	return nil
 }

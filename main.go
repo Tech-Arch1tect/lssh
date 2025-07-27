@@ -41,11 +41,27 @@ func run() error {
 		return fmt.Errorf("failed to run TUI: %w", err)
 	}
 
-	if m, ok := finalModel.(tui.Model); ok {
-		if choice := m.Choice(); choice != nil {
-			fmt.Printf("Connecting to %s (%s)...\n", choice.Name, choice.Hostname)
-			return ssh.Connect(choice)
+	for {
+		if m, ok := finalModel.(tui.Model); ok {
+			if choice := m.Choice(); choice != nil {
+				fmt.Printf("Connecting to %s (%s)...\n", choice.Name, choice.Hostname)
+				sshErr := ssh.Connect(choice)
+				
+				if sshErr != nil {
+					model = tui.NewModelWithError(providers, sshErr)
+				} else {
+					model = tui.NewModel(providers)
+				}
+				
+				p = tea.NewProgram(model, tea.WithAltScreen())
+				finalModel, err = p.Run()
+				if err != nil {
+					return fmt.Errorf("failed to run TUI: %w", err)
+				}
+				continue
+			}
 		}
+		break
 	}
 
 	return nil

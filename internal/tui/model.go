@@ -86,7 +86,15 @@ type dataLoadedMsg struct {
 }
 
 func NewModel(providers []provider.Provider) Model {
-	return Model{
+	return newModelWithError(providers, nil)
+}
+
+func NewModelWithError(providers []provider.Provider, err error) Model {
+	return newModelWithError(providers, err)
+}
+
+func newModelWithError(providers []provider.Provider, err error) Model {
+	m := Model{
 		providers:      providers,
 		selected:       make(map[int]struct{}),
 		loading:        true,
@@ -98,9 +106,19 @@ func NewModel(providers []provider.Provider) Model {
 		filterMode:     false,
 		filterText:     "",
 	}
+	
+	if err != nil {
+		m.loading = false
+		m.err = fmt.Errorf("connection error: %w", err)
+	}
+	
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.err != nil {
+		return nil
+	}
 	return m.loadData()
 }
 
@@ -134,6 +152,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.err != nil {
+			if msg.String() == "ctrl+c" || msg.String() == "q" {
+				m.quitting = true
+				return m, tea.Quit
+			} else {
+				m.err = nil
+				m.loading = true
+				return m, m.loadData()
+			}
+		}
+		
 		if m.filterMode {
 			return m.handleFilterInput(msg)
 		}
@@ -189,7 +218,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.groups = msg.groups
 		m.hosts = msg.hosts
-		m.err = msg.err
+		if msg.err != nil {
+			m.err = msg.err
+		}
 		m.updateFilteredData()
 	}
 
@@ -468,7 +499,19 @@ func (m Model) View() string {
 	}
 
 	if m.err != nil {
-		return fmt.Sprintf("Error: %v\nPress q to quit.\n", m.err)
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true).
+			Padding(1, 2).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("196"))
+		
+		errorMsg := fmt.Sprintf("⚠ %v", m.err)
+		
+		return fmt.Sprintf("%s\n\n%s\n\n%s\n", 
+			titleStyle.Render("LSSH - SSH Host Manager"),
+			errorStyle.Render(errorMsg),
+			helpStyle.Render("Press any key to continue, q to quit"))
 	}
 
 	s := titleStyle.Render("LSSH - SSH Host Manager")
