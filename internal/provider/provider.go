@@ -1,15 +1,10 @@
 package provider
 
 import (
-	"context"
-
-	"github.com/tech-arch1tect/lssh/pkg/types"
+	pkgprovider "github.com/tech-arch1tect/lssh/pkg/provider"
 )
 
-type Provider interface {
-	Name() string
-	GetGroups(ctx context.Context) ([]*types.Group, error)
-}
+type Provider = pkgprovider.Provider
 
 type Config struct {
 	Type   string                 `json:"type"`

@@ -26,7 +26,7 @@ func run() error {
 
 	var providers []provider.Provider
 	for _, providerConfig := range cfg.Providers {
-		p, err := provider.NewProvider(providerConfig)
+		p, err := provider.NewProvider(providerConfig, cfg)
 		if err != nil {
 			return fmt.Errorf("failed to create provider %s: %w", providerConfig.Name, err)
 		}

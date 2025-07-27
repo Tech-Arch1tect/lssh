@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/tech-arch1tect/lssh/internal/provider"
 )
 
 type Config struct {
-	Providers []provider.Config `json:"providers"`
+	Providers    []provider.Config `json:"providers"`
+	CacheEnabled *bool             `json:"cache_enabled,omitempty"`
 }
 
 func Load() (*Config, error) {
@@ -98,4 +100,18 @@ func getProviderType(filePath string) string {
 	default:
 		return "json"
 	}
+}
+
+func (c *Config) IsCacheEnabled() bool {
+	if envValue := os.Getenv("LSSH_CACHE_ENABLED"); envValue != "" {
+		if enabled, err := strconv.ParseBool(envValue); err == nil {
+			return enabled
+		}
+	}
+
+	if c.CacheEnabled != nil {
+		return *c.CacheEnabled
+	}
+
+	return true
 }
