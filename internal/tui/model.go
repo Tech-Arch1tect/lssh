@@ -77,6 +77,9 @@ type Model struct {
 	breadcrumb     []string
 	filterMode     bool
 	filterText     string
+	usernameMode   bool
+	usernameText   string
+	customUsername string
 }
 
 type dataLoadedMsg struct {
@@ -105,6 +108,8 @@ func newModelWithError(providers []provider.Provider, err error) Model {
 		terminalHeight: 24,
 		filterMode:     false,
 		filterText:     "",
+		usernameMode:   false,
+		usernameText:   "",
 	}
 	
 	if err != nil {
@@ -166,6 +171,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.filterMode {
 			return m.handleFilterInput(msg)
 		}
+		
+		if m.usernameMode {
+			return m.handleUsernameInput(msg)
+		}
 
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -205,6 +214,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.filterMode = true
 			return m, nil
+
+		case "u":
+			if m.viewMode != GroupView {
+				m.usernameMode = true
+				m.usernameText = ""
+				return m, nil
+			}
 
 		case "esc":
 			if m.filterText != "" {
@@ -362,6 +378,32 @@ func (m Model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleUsernameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.usernameMode = false
+		if m.usernameText != "" {
+			m.customUsername = m.usernameText
+			return m.selectHostWithUsername()
+		}
+		return m, nil
+	case "esc":
+		m.usernameMode = false
+		m.usernameText = ""
+		return m, nil
+	case "backspace":
+		if len(m.usernameText) > 0 {
+			m.usernameText = m.usernameText[:len(m.usernameText)-1]
+		}
+		return m, nil
+	default:
+		if len(msg.String()) == 1 {
+			m.usernameText += msg.String()
+		}
+		return m, nil
+	}
+}
+
 func (m Model) moveUp() (tea.Model, tea.Cmd) {
 	if m.cursorRow > 0 {
 		m.cursorRow--
@@ -432,6 +474,27 @@ func (m Model) enterGroup() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) selectHost() (tea.Model, tea.Cmd) {
+	currentIndex := m.getCurrentIndex()
+	var hosts []*types.Host
+
+	switch m.viewMode {
+	case AllHostsView:
+		hosts = m.filteredHosts
+	case HostView:
+		hosts = m.getFilteredGroupHosts()
+	}
+
+	if len(hosts) > 0 && currentIndex < len(hosts) {
+		m.choice = hosts[currentIndex]
+		m.customUsername = ""
+		m.quitting = true
+		return m, tea.Quit
+	}
+
+	return m, nil
+}
+
+func (m Model) selectHostWithUsername() (tea.Model, tea.Cmd) {
 	currentIndex := m.getCurrentIndex()
 	var hosts []*types.Host
 
@@ -530,6 +593,10 @@ func (m Model) View() string {
 		s += fmt.Sprintf("Filter: %s_\n\n", m.filterText)
 	} else if m.filterText != "" {
 		s += fmt.Sprintf("Filter: %s (Press Esc to clear)\n\n", m.filterText)
+	}
+
+	if m.usernameMode {
+		s += fmt.Sprintf("Enter username: %s_\n\n", m.usernameText)
 	}
 
 	switch m.viewMode {
@@ -703,6 +770,10 @@ func (m Model) calculateColumnWidths(items []string, rows, cols, maxWidth int) [
 func (m Model) getHelpText() string {
 	baseHelp := "↑↓←→/hjkl: navigate, Enter: select"
 
+	if m.viewMode != GroupView {
+		baseHelp += ", u: custom user"
+	}
+
 	if m.viewMode == HostView && len(m.breadcrumb) > 1 {
 		baseHelp += ", Backspace: back"
 	}
@@ -719,6 +790,10 @@ func (m Model) getHelpText() string {
 
 func (m Model) Choice() *types.Host {
 	return m.choice
+}
+
+func (m Model) CustomUsername() string {
+	return m.customUsername
 }
 
 func (m Model) getCurrentHost() *types.Host {

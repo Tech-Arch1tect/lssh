@@ -10,13 +10,20 @@ import (
 )
 
 func Connect(host *types.Host) error {
+	return ConnectWithUser(host, "")
+}
+
+func ConnectWithUser(host *types.Host, customUser string) error {
 	args := []string{}
 
 	if host.Port > 0 && host.Port != 22 {
 		args = append(args, "-p", fmt.Sprintf("%d", host.Port))
 	}
 
-	username := host.User
+	username := customUser
+	if username == "" {
+		username = host.User
+	}
 	if username == "" {
 		currentUser, err := user.Current()
 		if err != nil {

@@ -44,8 +44,13 @@ func run() error {
 	for {
 		if m, ok := finalModel.(tui.Model); ok {
 			if choice := m.Choice(); choice != nil {
-				fmt.Printf("Connecting to %s (%s)...\n", choice.Name, choice.Hostname)
-				sshErr := ssh.Connect(choice)
+				customUser := m.CustomUsername()
+				if customUser != "" {
+					fmt.Printf("Connecting to %s (%s) as %s...\n", choice.Name, choice.Hostname, customUser)
+				} else {
+					fmt.Printf("Connecting to %s (%s)...\n", choice.Name, choice.Hostname)
+				}
+				sshErr := ssh.ConnectWithUser(choice, customUser)
 				
 				if sshErr != nil {
 					model = tui.NewModelWithError(providers, sshErr)
