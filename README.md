@@ -7,6 +7,7 @@ A TUI-based CLI tool for managing and connecting to SSH servers with a pluggable
 - **Grid-based interface** with arrow key navigation
 - **Real-time filtering** with `/` key (searches names and hostnames)
 - **Multiple view modes**: All Hosts (flat) and By Group (hierarchical)
+- **Bulk command execution** across multiple servers simultaneously
 - **Pluggable providers**: JSON files, Ansible inventories, and extensible architecture
 - **Automatic SSH connection** with user override support (press `u`)
 - **Caching layer** for improved performance with remote providers with no extra effort from the user
@@ -38,6 +39,7 @@ go build -o lssh .
 
 ## Navigation
 
+### Basic Navigation
 - `↑/↓/j/k` or arrow keys: Navigate hosts/groups
 - `←/→/h/l`: Navigate grid columns
 - `Enter`: Connect to host or enter group
@@ -46,3 +48,10 @@ go build -o lssh .
 - `u`: Override username for connection
 - `Backspace/h`: Go back to previous view
 - `q/Ctrl+C`: Quit
+
+### Bulk Commands
+- `s`: Toggle bulk selection mode
+- `Space`: Toggle host selection (shows checkboxes)
+- `c`: Enter command to execute on selected hosts
+- View real-time progress and results for all hosts
+- Output is saved in ~/.lssh/logs/

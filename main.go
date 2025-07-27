@@ -51,13 +51,13 @@ func run() error {
 					fmt.Printf("Connecting to %s (%s)...\n", choice.Name, choice.Hostname)
 				}
 				sshErr := ssh.ConnectWithUser(choice, customUser)
-				
+
 				if sshErr != nil {
 					model = tui.NewModelWithError(providers, sshErr)
 				} else {
 					model = tui.NewModel(providers)
 				}
-				
+
 				p = tea.NewProgram(model, tea.WithAltScreen())
 				finalModel, err = p.Run()
 				if err != nil {

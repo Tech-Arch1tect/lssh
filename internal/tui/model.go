@@ -3,12 +3,16 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tech-arch1tect/lssh/internal/provider"
+	"github.com/tech-arch1tect/lssh/internal/ssh"
 	"github.com/tech-arch1tect/lssh/pkg/types"
 )
 
@@ -54,37 +58,57 @@ const (
 	AllHostsView ViewMode = iota
 	GroupView
 	HostView
+	BulkCommandView
 )
 
 type Model struct {
-	providers      []provider.Provider
-	groups         []*types.Group
-	hosts          []*types.Host
-	filteredHosts  []*types.Host
-	filteredGroups []*types.Group
-	currentGroup   *types.Group
-	viewMode       ViewMode
-	cursorRow      int
-	cursorCol      int
-	gridCols       int
-	terminalWidth  int
-	terminalHeight int
-	selected       map[int]struct{}
-	choice         *types.Host
-	err            error
-	quitting       bool
-	loading        bool
-	breadcrumb     []string
-	filterMode     bool
-	filterText     string
-	usernameMode   bool
-	usernameText   string
-	customUsername string
+	providers         []provider.Provider
+	groups            []*types.Group
+	hosts             []*types.Host
+	filteredHosts     []*types.Host
+	filteredGroups    []*types.Group
+	currentGroup      *types.Group
+	viewMode          ViewMode
+	cursorRow         int
+	cursorCol         int
+	gridCols          int
+	terminalWidth     int
+	terminalHeight    int
+	selected          map[int]struct{}
+	choice            *types.Host
+	err               error
+	quitting          bool
+	loading           bool
+	breadcrumb        []string
+	filterMode        bool
+	filterText        string
+	usernameMode      bool
+	usernameText      string
+	customUsername    string
+	bulkSelectionMode bool
+	bulkCommandMode   bool
+	bulkCommandText   string
+	selectedHosts     []*types.Host
+	bulkResults       map[string]*BulkCommandResult
+	bulkOutputFile    string
+}
+
+type BulkCommandResult struct {
+	Host   *types.Host
+	Output string
+	Error  error
+	Done   bool
 }
 
 type dataLoadedMsg struct {
 	groups []*types.Group
 	hosts  []*types.Host
+	err    error
+}
+
+type bulkCommandFinishedMsg struct {
+	host   *types.Host
+	output string
 	err    error
 }
 
@@ -98,25 +122,31 @@ func NewModelWithError(providers []provider.Provider, err error) Model {
 
 func newModelWithError(providers []provider.Provider, err error) Model {
 	m := Model{
-		providers:      providers,
-		selected:       make(map[int]struct{}),
-		loading:        true,
-		viewMode:       AllHostsView,
-		breadcrumb:     []string{"All Hosts"},
-		gridCols:       3,
-		terminalWidth:  80,
-		terminalHeight: 24,
-		filterMode:     false,
-		filterText:     "",
-		usernameMode:   false,
-		usernameText:   "",
+		providers:         providers,
+		selected:          make(map[int]struct{}),
+		loading:           true,
+		viewMode:          AllHostsView,
+		breadcrumb:        []string{"All Hosts"},
+		gridCols:          3,
+		terminalWidth:     80,
+		terminalHeight:    24,
+		filterMode:        false,
+		filterText:        "",
+		usernameMode:      false,
+		usernameText:      "",
+		bulkSelectionMode: false,
+		bulkCommandMode:   false,
+		bulkCommandText:   "",
+		selectedHosts:     make([]*types.Host, 0),
+		bulkResults:       make(map[string]*BulkCommandResult),
+		bulkOutputFile:    "",
 	}
-	
+
 	if err != nil {
 		m.loading = false
 		m.err = fmt.Errorf("connection error: %w", err)
 	}
-	
+
 	return m
 }
 
@@ -167,13 +197,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.loadData()
 			}
 		}
-		
+
 		if m.filterMode {
 			return m.handleFilterInput(msg)
 		}
-		
+
 		if m.usernameMode {
 			return m.handleUsernameInput(msg)
+		}
+
+		if m.bulkCommandMode {
+			return m.handleBulkCommandInput(msg)
 		}
 
 		switch msg.String() {
@@ -197,7 +231,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.moveRight()
 
 		case "enter", " ":
-			if m.viewMode == GroupView {
+			if m.bulkSelectionMode && m.viewMode != GroupView {
+				return m.toggleHostSelection()
+			} else if m.viewMode == GroupView {
 				return m.enterGroup()
 			} else {
 				return m.selectHost()
@@ -222,6 +258,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+		case "s":
+			if m.viewMode != GroupView && m.viewMode != BulkCommandView {
+				m.bulkSelectionMode = !m.bulkSelectionMode
+				if !m.bulkSelectionMode {
+					m.selectedHosts = make([]*types.Host, 0)
+				}
+				return m, nil
+			}
+
+		case "c":
+			if m.bulkSelectionMode && len(m.selectedHosts) > 0 {
+				m.bulkCommandMode = true
+				m.bulkCommandText = ""
+				return m, nil
+			}
+
 		case "esc":
 			if m.filterText != "" {
 				m.filterText = ""
@@ -238,6 +290,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 		}
 		m.updateFilteredData()
+
+	case bulkCommandFinishedMsg:
+		key := fmt.Sprintf("%s@%s", msg.host.Name, msg.host.Hostname)
+		if result, exists := m.bulkResults[key]; exists {
+			result.Output = msg.output
+			result.Error = msg.err
+			result.Done = true
+
+			if err := m.saveBulkResult(msg.host, msg.output, msg.err); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to save result to file: %v\n", err)
+			}
+		}
 	}
 
 	return m, nil
@@ -404,6 +468,58 @@ func (m Model) handleUsernameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleBulkCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.bulkCommandMode = false
+		if m.bulkCommandText != "" {
+			return m.executeBulkCommand()
+		}
+		return m, nil
+	case "esc":
+		m.bulkCommandMode = false
+		m.bulkCommandText = ""
+		return m, nil
+	case "backspace":
+		if len(m.bulkCommandText) > 0 {
+			m.bulkCommandText = m.bulkCommandText[:len(m.bulkCommandText)-1]
+		}
+		return m, nil
+	default:
+		if len(msg.String()) == 1 {
+			m.bulkCommandText += msg.String()
+		}
+		return m, nil
+	}
+}
+
+func (m Model) toggleHostSelection() (tea.Model, tea.Cmd) {
+	currentIndex := m.getCurrentIndex()
+	var hosts []*types.Host
+
+	switch m.viewMode {
+	case AllHostsView:
+		hosts = m.filteredHosts
+	case HostView:
+		hosts = m.getFilteredGroupHosts()
+	}
+
+	if len(hosts) > 0 && currentIndex < len(hosts) {
+		selectedHost := hosts[currentIndex]
+
+		for i, host := range m.selectedHosts {
+			if host.Name == selectedHost.Name && host.Hostname == selectedHost.Hostname {
+				m.selectedHosts = append(m.selectedHosts[:i], m.selectedHosts[i+1:]...)
+				return m, nil
+			}
+		}
+
+		m.selectedHosts = append(m.selectedHosts, selectedHost)
+	}
+
+	return m, nil
+}
+
 func (m Model) moveUp() (tea.Model, tea.Cmd) {
 	if m.cursorRow > 0 {
 		m.cursorRow--
@@ -530,9 +646,134 @@ func (m Model) switchView() (tea.Model, tea.Cmd) {
 		m.viewMode = AllHostsView
 		m.breadcrumb = []string{"All Hosts"}
 		m.currentGroup = nil
+	case BulkCommandView:
+		m.viewMode = AllHostsView
+		m.breadcrumb = []string{"All Hosts"}
+		m.currentGroup = nil
+		m.bulkSelectionMode = false
+		m.selectedHosts = make([]*types.Host, 0)
+		m.bulkResults = make(map[string]*BulkCommandResult)
+		m.bulkOutputFile = ""
 	}
 
 	return m, nil
+}
+
+func (m Model) executeBulkCommand() (tea.Model, tea.Cmd) {
+	if len(m.selectedHosts) == 0 {
+		return m, nil
+	}
+
+	m.viewMode = BulkCommandView
+	m.breadcrumb = []string{fmt.Sprintf("Bulk Command: %s", m.bulkCommandText)}
+	m.bulkSelectionMode = false
+
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("lssh-bulk-%s.log", timestamp)
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		m.err = fmt.Errorf("failed to get home directory: %w", err)
+		return m, nil
+	}
+
+	lsshDir := filepath.Join(homeDir, ".lssh", "logs")
+	err = os.MkdirAll(lsshDir, 0755)
+	if err != nil {
+		m.err = fmt.Errorf("failed to create logs directory: %w", err)
+		return m, nil
+	}
+
+	m.bulkOutputFile = filepath.Join(lsshDir, filename)
+
+	err = m.initializeBulkOutputFile()
+	if err != nil {
+		m.err = fmt.Errorf("failed to create output file: %w", err)
+		return m, nil
+	}
+
+	m.bulkResults = make(map[string]*BulkCommandResult)
+	for _, host := range m.selectedHosts {
+		key := fmt.Sprintf("%s@%s", host.Name, host.Hostname)
+		m.bulkResults[key] = &BulkCommandResult{
+			Host: host,
+			Done: false,
+		}
+	}
+
+	commands := make([]tea.Cmd, len(m.selectedHosts))
+	for i, host := range m.selectedHosts {
+		commands[i] = m.executeBulkCommandOnHost(host, m.bulkCommandText)
+	}
+
+	return m, tea.Batch(commands...)
+}
+
+func (m Model) executeBulkCommandOnHost(host *types.Host, command string) tea.Cmd {
+	return tea.Cmd(func() tea.Msg {
+		output, err := ssh.ExecuteCommand(context.Background(), host, command)
+		return bulkCommandFinishedMsg{
+			host:   host,
+			output: output,
+			err:    err,
+		}
+	})
+}
+
+func (m Model) isHostSelected(host *types.Host) bool {
+	for _, selectedHost := range m.selectedHosts {
+		if selectedHost.Name == host.Name && selectedHost.Hostname == host.Hostname {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) initializeBulkOutputFile() error {
+	file, err := os.Create(m.bulkOutputFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	header := fmt.Sprintf("LSSH Bulk Command Execution Log\n")
+	header += fmt.Sprintf("================================\n")
+	header += fmt.Sprintf("Timestamp: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	header += fmt.Sprintf("Command: %s\n", m.bulkCommandText)
+	header += fmt.Sprintf("Hosts: %d\n", len(m.selectedHosts))
+	header += fmt.Sprintf("--------------------------------\n\n")
+
+	_, err = file.WriteString(header)
+	return err
+}
+
+func (m Model) saveBulkResult(host *types.Host, output string, execErr error) error {
+	if m.bulkOutputFile == "" {
+		return nil
+	}
+
+	file, err := os.OpenFile(m.bulkOutputFile, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	timestamp := time.Now().Format("15:04:05")
+	hostHeader := fmt.Sprintf("[%s] %s (%s)\n", timestamp, host.Name, host.Hostname)
+	result := hostHeader
+
+	if execErr != nil {
+		result += fmt.Sprintf("ERROR: %v\n", execErr)
+	}
+
+	if output != "" {
+		result += fmt.Sprintf("OUTPUT:\n%s\n", output)
+	}
+
+	result += fmt.Sprintf("---\n\n")
+
+	_, err = file.WriteString(result)
+	return err
 }
 
 func (m Model) backToGroups() (tea.Model, tea.Cmd) {
@@ -568,10 +809,10 @@ func (m Model) View() string {
 			Padding(1, 2).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("196"))
-		
+
 		errorMsg := fmt.Sprintf("⚠ %v", m.err)
-		
-		return fmt.Sprintf("%s\n\n%s\n\n%s\n", 
+
+		return fmt.Sprintf("%s\n\n%s\n\n%s\n",
 			titleStyle.Render("LSSH - SSH Host Manager"),
 			errorStyle.Render(errorMsg),
 			helpStyle.Render("Press any key to continue, q to quit"))
@@ -597,6 +838,10 @@ func (m Model) View() string {
 
 	if m.usernameMode {
 		s += fmt.Sprintf("Enter username: %s_\n\n", m.usernameText)
+	} else if m.bulkCommandMode {
+		s += fmt.Sprintf("Enter command: %s_\n\n", m.bulkCommandText)
+	} else if m.bulkSelectionMode {
+		s += fmt.Sprintf("Bulk Selection Mode - %d hosts selected (Space: toggle, c: command)\n\n", len(m.selectedHosts))
 	}
 
 	switch m.viewMode {
@@ -607,6 +852,8 @@ func (m Model) View() string {
 	case HostView:
 		hosts := m.getFilteredGroupHosts()
 		return m.renderGridView(s, hosts, nil)
+	case BulkCommandView:
+		return m.renderBulkCommandView(s)
 	default:
 		return s + "Unknown view mode"
 	}
@@ -624,7 +871,15 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 	if hosts != nil {
 		itemCount = len(hosts)
 		for _, host := range hosts {
-			items = append(items, fmt.Sprintf("%s (%s)", host.Name, host.Hostname))
+			prefix := ""
+			if m.bulkSelectionMode {
+				if m.isHostSelected(host) {
+					prefix = "[✓] "
+				} else {
+					prefix = "[ ] "
+				}
+			}
+			items = append(items, fmt.Sprintf("%s%s (%s)", prefix, host.Name, host.Hostname))
 		}
 	} else if groups != nil {
 		itemCount = len(groups)
@@ -768,10 +1023,23 @@ func (m Model) calculateColumnWidths(items []string, rows, cols, maxWidth int) [
 }
 
 func (m Model) getHelpText() string {
-	baseHelp := "↑↓←→/hjkl: navigate, Enter: select"
+	if m.viewMode == BulkCommandView {
+		return "Tab: back to hosts, q: quit"
+	}
 
-	if m.viewMode != GroupView {
-		baseHelp += ", u: custom user"
+	baseHelp := "↑↓←→/hjkl: navigate"
+
+	if m.bulkSelectionMode {
+		baseHelp += ", Space: toggle selection"
+		if len(m.selectedHosts) > 0 {
+			baseHelp += ", c: enter command"
+		}
+	} else {
+		baseHelp += ", Enter: select"
+	}
+
+	if m.viewMode != GroupView && m.viewMode != BulkCommandView {
+		baseHelp += ", u: custom user, s: bulk mode"
 	}
 
 	if m.viewMode == HostView && len(m.breadcrumb) > 1 {
@@ -845,4 +1113,61 @@ func (m Model) renderHostDetails(host *types.Host) string {
 	content += detailsValueStyle.Render(host.SSHCommand())
 
 	return detailsPanelStyle.Render(content)
+}
+
+func (m Model) renderBulkCommandView(header string) string {
+	s := header
+	s += fmt.Sprintf("Command: %s\n", m.bulkCommandText)
+	s += fmt.Sprintf("Hosts: %d\n", len(m.selectedHosts))
+
+	if m.bulkOutputFile != "" {
+		outputFileStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+		s += fmt.Sprintf("Output: %s\n", outputFileStyle.Render(m.bulkOutputFile))
+	}
+	s += "\n"
+
+	completedCount := 0
+	for _, result := range m.bulkResults {
+		if result.Done {
+			completedCount++
+		}
+	}
+	s += fmt.Sprintf("Progress: %d/%d completed\n\n", completedCount, len(m.bulkResults))
+
+	for _, host := range m.selectedHosts {
+		key := fmt.Sprintf("%s@%s", host.Name, host.Hostname)
+		result, exists := m.bulkResults[key]
+
+		hostHeader := fmt.Sprintf("=== %s ===", host.Name)
+		s += lipgloss.NewStyle().Bold(true).Render(hostHeader) + "\n"
+
+		if !exists {
+			s += "Initializing...\n\n"
+			continue
+		}
+
+		if !result.Done {
+			s += "Running...\n\n"
+			continue
+		}
+
+		if result.Error != nil {
+			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+			s += errorStyle.Render(fmt.Sprintf("Error: %v", result.Error)) + "\n"
+		}
+
+		if result.Output != "" {
+			outputStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+			lines := strings.Split(result.Output, "\n")
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					s += outputStyle.Render(line) + "\n"
+				}
+			}
+		}
+		s += "\n"
+	}
+
+	s += "\n" + helpStyle.Render("Tab: back to hosts, q: quit")
+	return s
 }
