@@ -33,7 +33,7 @@ func run() error {
 		providers = append(providers, p)
 	}
 
-	model := tui.NewModel(providers)
+	model := tui.NewModel(providers, cfg)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	finalModel, err := p.Run()
@@ -53,9 +53,9 @@ func run() error {
 				sshErr := ssh.ConnectWithUser(choice, customUser)
 
 				if sshErr != nil {
-					model = tui.NewModelWithError(providers, sshErr)
+					model = tui.NewModelWithError(providers, cfg, sshErr)
 				} else {
-					model = tui.NewModel(providers)
+					model = tui.NewModel(providers, cfg)
 				}
 
 				p = tea.NewProgram(model, tea.WithAltScreen())

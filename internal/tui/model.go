@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/tech-arch1tect/lssh/internal/config"
 	"github.com/tech-arch1tect/lssh/internal/provider"
 	"github.com/tech-arch1tect/lssh/internal/ssh"
 	"github.com/tech-arch1tect/lssh/pkg/types"
@@ -63,6 +64,7 @@ const (
 
 type Model struct {
 	providers         []provider.Provider
+	config            *config.Config
 	groups            []*types.Group
 	hosts             []*types.Host
 	filteredHosts     []*types.Host
@@ -114,17 +116,18 @@ type bulkCommandFinishedMsg struct {
 	err    error
 }
 
-func NewModel(providers []provider.Provider) Model {
-	return newModelWithError(providers, nil)
+func NewModel(providers []provider.Provider, cfg *config.Config) Model {
+	return newModelWithError(providers, cfg, nil)
 }
 
-func NewModelWithError(providers []provider.Provider, err error) Model {
-	return newModelWithError(providers, err)
+func NewModelWithError(providers []provider.Provider, cfg *config.Config, err error) Model {
+	return newModelWithError(providers, cfg, err)
 }
 
-func newModelWithError(providers []provider.Provider, err error) Model {
+func newModelWithError(providers []provider.Provider, cfg *config.Config, err error) Model {
 	m := Model{
 		providers:         providers,
+		config:            cfg,
 		selected:          make(map[int]struct{}),
 		loading:           true,
 		viewMode:          AllHostsView,
@@ -172,10 +175,12 @@ func (m Model) loadData() tea.Cmd {
 				return dataLoadedMsg{err: fmt.Errorf("failed to load data from %s: %w", p.Name(), err)}
 			}
 
-			allGroups = append(allGroups, groups...)
+			filteredGroups := m.filterGroups(groups)
+			allGroups = append(allGroups, filteredGroups...)
 
-			for _, group := range groups {
-				allHosts = append(allHosts, group.AllHosts()...)
+			for _, group := range filteredGroups {
+				groupHosts := m.filterHosts(group.AllHosts())
+				allHosts = append(allHosts, groupHosts...)
 			}
 		}
 
@@ -1474,4 +1479,36 @@ func (m Model) renderBulkCommandView(header string) string {
 
 	s += "\n" + helpStyle.Render("Tab: back to hosts, q: quit")
 	return s
+}
+
+func (m Model) filterGroups(groups []*types.Group) []*types.Group {
+	if m.config == nil {
+		return groups
+	}
+
+	var filtered []*types.Group
+	for _, group := range groups {
+		if !m.config.IsGroupExcluded(group.Name) {
+			filteredGroup := *group
+			filteredGroup.Hosts = m.filterHosts(group.Hosts)
+			if len(filteredGroup.Hosts) > 0 || len(group.SubGroups) > 0 {
+				filtered = append(filtered, &filteredGroup)
+			}
+		}
+	}
+	return filtered
+}
+
+func (m Model) filterHosts(hosts []*types.Host) []*types.Host {
+	if m.config == nil {
+		return hosts
+	}
+
+	var filtered []*types.Host
+	for _, host := range hosts {
+		if !m.config.IsHostExcluded(host.Name) {
+			filtered = append(filtered, host)
+		}
+	}
+	return filtered
 }
