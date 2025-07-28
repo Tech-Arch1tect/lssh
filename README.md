@@ -11,6 +11,7 @@ A TUI-based CLI tool for managing and connecting to SSH servers with a pluggable
 - **Pluggable providers**: JSON files, Ansible inventories, and extensible architecture
 - **Automatic SSH connection** with user override support (press `u`)
 - **Caching layer** for improved performance with remote providers with no extra effort from the user
+- **Exclude patterns**: Hide specific groups or hosts using wildcard patterns
 
 ## Providers
 
@@ -36,6 +37,59 @@ lssh
 ```bash
 go build -o lssh .
 ```
+
+## Configuration
+
+### Config File
+
+Create a configuration file at `~/.config/lssh/config.json`:
+
+```json
+{
+  "providers": [
+    {
+      "type": "json",
+      "name": "default",
+      "config": {
+        "file": "hosts.json"
+      }
+    }
+  ],
+  "exclude_groups": ["Development", "test_*"],
+  "exclude_hosts": ["web-*", "backup-server", "*-temp"],
+  "cache_enabled": true
+}
+```
+
+### Environment Variables
+
+Override configuration with environment variables:
+
+- `LSSH_HOSTS_FILE`: Override hosts file location
+- `LSSH_PROVIDER_TYPE`: Override provider type (json, ansible)
+- `LSSH_EXCLUDE_GROUPS`: Comma-separated list of group patterns to exclude
+- `LSSH_EXCLUDE_HOSTS`: Comma-separated list of host patterns to exclude
+- `LSSH_CACHE_ENABLED`: Enable/disable caching (true/false)
+- `XDG_CONFIG_HOME`: Override config directory
+
+```bash
+# Example: Exclude development and test hosts
+export LSSH_EXCLUDE_GROUPS="Development,test_*"
+export LSSH_EXCLUDE_HOSTS="web-*,*-temp"
+lssh
+```
+
+### Exclude Patterns
+
+Use wildcard patterns to hide groups or hosts:
+
+- `*` matches any sequence of characters
+- `web-*` matches `web-01`, `web-02`, etc.
+- `*-temp` matches `server-temp`, `db-temp`, etc.
+- `test_*` matches `test_group`, `test_env`, etc.
+- Exact matches work without wildcards: `backup-server`
+
+Environment variables take precedence over config file settings.
 
 ## Navigation
 
