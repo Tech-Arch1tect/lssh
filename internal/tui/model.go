@@ -401,13 +401,64 @@ func (m Model) getGridDimensions() (rows, cols int) {
 		return 0, 0
 	}
 
-	cols = m.gridCols
+	cols = m.getOptimalColumnsForCurrentView()
 	if cols <= 0 {
 		cols = 1
 	}
 
 	rows = (itemCount + cols - 1) / cols
 	return rows, cols
+}
+
+func (m Model) getOptimalColumnsForCurrentView() int {
+	var items []string
+
+	switch m.viewMode {
+	case AllHostsView:
+		var hosts []*types.Host
+		if m.currentGroup != nil {
+			hosts = m.getFilteredGroupHosts()
+		} else {
+			hosts = m.filteredHosts
+		}
+		items = m.formatHostItems(hosts)
+	case GroupView:
+		for _, group := range m.filteredGroups {
+			hostCount := len(group.AllHosts())
+			items = append(items, fmt.Sprintf("%s (%d hosts)", group.Name, hostCount))
+		}
+	case HostView:
+		hosts := m.getFilteredGroupHosts()
+		items = m.formatHostItems(hosts)
+	}
+
+	detailsPanelWidth := 0
+	if m.viewMode != GroupView && len(items) > 0 {
+		if m.terminalWidth > 120 {
+			detailsPanelWidth = 45
+		} else {
+			detailsPanelWidth = 35
+		}
+	}
+
+	availableWidth := m.terminalWidth - detailsPanelWidth - 6
+	return m.calculateOptimalColumns(items, availableWidth)
+}
+
+func (m Model) formatHostItems(hosts []*types.Host) []string {
+	var items []string
+	for _, host := range hosts {
+		prefix := ""
+		if m.bulkSelectionMode {
+			if m.isHostSelected(host) {
+				prefix = "[✓] "
+			} else {
+				prefix = "[ ] "
+			}
+		}
+		items = append(items, fmt.Sprintf("%s%s (%s)", prefix, host.Name, host.Hostname))
+	}
+	return items
 }
 
 func (m Model) getCurrentIndex() int {
@@ -528,11 +579,11 @@ func (m Model) moveUp() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) moveDown() (tea.Model, tea.Cmd) {
-	rows, _ := m.getGridDimensions()
+	rows, cols := m.getGridDimensions()
 	if m.cursorRow < rows-1 {
 		index := m.getCurrentIndex()
 		itemCount := m.getCurrentItemCount()
-		if index+m.gridCols < itemCount {
+		if index+cols < itemCount {
 			m.cursorRow++
 		}
 	}
@@ -867,17 +918,7 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 
 	if hosts != nil {
 		itemCount = len(hosts)
-		for _, host := range hosts {
-			prefix := ""
-			if m.bulkSelectionMode {
-				if m.isHostSelected(host) {
-					prefix = "[✓] "
-				} else {
-					prefix = "[ ] "
-				}
-			}
-			items = append(items, fmt.Sprintf("%s%s (%s)", prefix, host.Name, host.Hostname))
-		}
+		items = m.formatHostItems(hosts)
 	} else if groups != nil {
 		itemCount = len(groups)
 		for _, group := range groups {
