@@ -74,6 +74,8 @@ type Model struct {
 	gridCols          int
 	terminalWidth     int
 	terminalHeight    int
+	currentPage       int
+	itemsPerPage      int
 	selected          map[int]struct{}
 	choice            *types.Host
 	err               error
@@ -130,6 +132,8 @@ func newModelWithError(providers []provider.Provider, err error) Model {
 		gridCols:          3,
 		terminalWidth:     80,
 		terminalHeight:    24,
+		currentPage:       0,
+		itemsPerPage:      0,
 		filterMode:        false,
 		filterText:        "",
 		usernameMode:      false,
@@ -184,6 +188,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.terminalWidth = msg.Width
 		m.terminalHeight = msg.Height
+		m.updateItemsPerPage()
+		m.ensureCursorInBounds()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -229,6 +235,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "right", "l":
 			return m.moveRight()
+
+		case "p":
+			return m.previousPage()
+
+		case "n":
+			return m.nextPage()
 
 		case "enter", " ":
 			if m.bulkSelectionMode && m.viewMode != GroupView {
@@ -289,6 +301,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 		}
+		m.updateItemsPerPage()
 		m.updateFilteredData()
 
 	case bulkCommandFinishedMsg:
@@ -311,6 +324,7 @@ func (m *Model) updateFilteredData() {
 	if m.filterText == "" {
 		m.filteredHosts = m.hosts
 		m.filteredGroups = m.groups
+		m.ensureCursorInBounds()
 		return
 	}
 
@@ -339,12 +353,20 @@ func (m *Model) updateFilteredData() {
 		}
 	}
 
-	m.resetCursor()
+	m.resetCursorAndPage()
 }
 
 func (m *Model) resetCursor() {
 	m.cursorRow = 0
 	m.cursorCol = 0
+	m.ensureCursorInBounds()
+}
+
+func (m *Model) resetCursorAndPage() {
+	m.cursorRow = 0
+	m.cursorCol = 0
+	m.currentPage = 0
+	m.ensureCursorInBounds()
 }
 
 func (m Model) getCurrentItems() interface{} {
@@ -401,48 +423,13 @@ func (m Model) getGridDimensions() (rows, cols int) {
 		return 0, 0
 	}
 
-	cols = m.getOptimalColumnsForCurrentView()
+	cols = m.calculateGridColumns()
 	if cols <= 0 {
 		cols = 1
 	}
 
 	rows = (itemCount + cols - 1) / cols
 	return rows, cols
-}
-
-func (m Model) getOptimalColumnsForCurrentView() int {
-	var items []string
-
-	switch m.viewMode {
-	case AllHostsView:
-		var hosts []*types.Host
-		if m.currentGroup != nil {
-			hosts = m.getFilteredGroupHosts()
-		} else {
-			hosts = m.filteredHosts
-		}
-		items = m.formatHostItems(hosts)
-	case GroupView:
-		for _, group := range m.filteredGroups {
-			hostCount := len(group.AllHosts())
-			items = append(items, fmt.Sprintf("%s (%d hosts)", group.Name, hostCount))
-		}
-	case HostView:
-		hosts := m.getFilteredGroupHosts()
-		items = m.formatHostItems(hosts)
-	}
-
-	detailsPanelWidth := 0
-	if m.viewMode != GroupView && len(items) > 0 {
-		if m.terminalWidth > 120 {
-			detailsPanelWidth = 45
-		} else {
-			detailsPanelWidth = 35
-		}
-	}
-
-	availableWidth := m.terminalWidth - detailsPanelWidth - 6
-	return m.calculateOptimalColumns(items, availableWidth)
 }
 
 func (m Model) formatHostItems(hosts []*types.Host) []string {
@@ -456,17 +443,193 @@ func (m Model) formatHostItems(hosts []*types.Host) []string {
 				prefix = "[ ] "
 			}
 		}
-		items = append(items, fmt.Sprintf("%s%s (%s)", prefix, host.Name, host.Hostname))
+
+		maxNameLen := 25
+		maxHostnameLen := 30
+
+		name := host.Name
+		if len(name) > maxNameLen {
+			name = name[:maxNameLen-2] + ".."
+		}
+
+		hostname := host.Hostname
+		if len(hostname) > maxHostnameLen {
+			hostname = hostname[:maxHostnameLen-2] + ".."
+		}
+
+		items = append(items, fmt.Sprintf("%s%s (%s)", prefix, name, hostname))
 	}
 	return items
 }
 
 func (m Model) getCurrentIndex() int {
-	_, cols := m.getGridDimensions()
+	_, cols := m.getPageGridDimensions()
 	if cols <= 0 {
 		return 0
 	}
 	return m.cursorRow*cols + m.cursorCol
+}
+
+func (m *Model) calculateItemsPerPage() int {
+	headerHeight := 8
+	helpHeight := 2
+	paginationHeight := 1
+	availableHeight := m.terminalHeight - headerHeight - helpHeight - paginationHeight
+
+	if availableHeight < 5 {
+		availableHeight = 5
+	}
+
+	cols := m.calculateGridColumns()
+	return availableHeight * cols
+}
+
+func (m Model) getPageGridDimensions() (rows, cols int) {
+	pageItemCount := m.getCurrentPageItemCount()
+	if pageItemCount == 0 {
+		return 0, 0
+	}
+
+	cols = m.calculateGridColumns()
+	rows = (pageItemCount + cols - 1) / cols
+	return rows, cols
+}
+
+func (m Model) calculateGridColumns() int {
+	detailsPanelWidth := 0
+	if m.viewMode != GroupView {
+		if m.terminalWidth > 120 {
+			detailsPanelWidth = 45
+		} else {
+			detailsPanelWidth = 35
+		}
+	}
+
+	availableWidth := m.terminalWidth - detailsPanelWidth - 6
+
+	var items []string
+	pageItems := m.getCurrentPageItems()
+
+	switch v := pageItems.(type) {
+	case []*types.Host:
+		items = m.formatHostItems(v)
+	case []*types.Group:
+		for _, group := range v {
+			hostCount := len(group.AllHosts())
+
+			maxGroupNameLen := 40
+			groupName := group.Name
+			if len(groupName) > maxGroupNameLen {
+				groupName = groupName[:maxGroupNameLen-2] + ".."
+			}
+
+			items = append(items, fmt.Sprintf("%s (%d hosts)", groupName, hostCount))
+		}
+	}
+
+	if len(items) == 0 {
+		switch m.viewMode {
+		case AllHostsView, HostView:
+			items = []string{"sample-host-name-1234567 (hostname.example.com.longnm..)"}
+		case GroupView:
+			items = []string{"Sample Group Name That Is Quite Long.. (99 hosts)"}
+		}
+	}
+
+	cols := m.calculateOptimalColumns(items, availableWidth)
+	if cols <= 0 {
+		cols = 1
+	}
+	return cols
+}
+
+func (m *Model) updateItemsPerPage() {
+	m.itemsPerPage = m.calculateItemsPerPage()
+	m.ensureCursorInBounds()
+}
+
+func (m *Model) ensureCursorInBounds() {
+	pageItemCount := m.getCurrentPageItemCount()
+	if pageItemCount == 0 {
+		m.cursorRow = 0
+		m.cursorCol = 0
+		return
+	}
+
+	rows, cols := m.getPageGridDimensions()
+
+	if m.cursorRow >= rows {
+		m.cursorRow = rows - 1
+	}
+	if m.cursorRow < 0 {
+		m.cursorRow = 0
+	}
+
+	if m.cursorCol >= cols {
+		m.cursorCol = cols - 1
+	}
+	if m.cursorCol < 0 {
+		m.cursorCol = 0
+	}
+
+	currentIndex := m.cursorRow*cols + m.cursorCol
+	if currentIndex >= pageItemCount {
+
+		lastIndex := pageItemCount - 1
+		m.cursorRow = lastIndex / cols
+		m.cursorCol = lastIndex % cols
+	}
+}
+
+func (m Model) getTotalPages() int {
+	itemCount := m.getCurrentItemCount()
+	if itemCount == 0 || m.itemsPerPage == 0 {
+		return 1
+	}
+	return (itemCount + m.itemsPerPage - 1) / m.itemsPerPage
+}
+
+func (m Model) getCurrentPageItems() interface{} {
+	allItems := m.getCurrentItems()
+	if m.itemsPerPage == 0 {
+		return allItems
+	}
+
+	startIdx := m.currentPage * m.itemsPerPage
+	endIdx := startIdx + m.itemsPerPage
+
+	switch v := allItems.(type) {
+	case []*types.Host:
+		if startIdx >= len(v) {
+			return []*types.Host{}
+		}
+		if endIdx > len(v) {
+			endIdx = len(v)
+		}
+		return v[startIdx:endIdx]
+	case []*types.Group:
+		if startIdx >= len(v) {
+			return []*types.Group{}
+		}
+		if endIdx > len(v) {
+			endIdx = len(v)
+		}
+		return v[startIdx:endIdx]
+	default:
+		return allItems
+	}
+}
+
+func (m Model) getCurrentPageItemCount() int {
+	pageItems := m.getCurrentPageItems()
+	switch v := pageItems.(type) {
+	case []*types.Host:
+		return len(v)
+	case []*types.Group:
+		return len(v)
+	default:
+		return 0
+	}
 }
 
 func (m Model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -545,7 +708,8 @@ func (m Model) handleBulkCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) toggleHostSelection() (tea.Model, tea.Cmd) {
-	currentIndex := m.getCurrentIndex()
+	pageIndex := m.getCurrentIndex()
+	globalIndex := m.currentPage*m.itemsPerPage + pageIndex
 	var hosts []*types.Host
 
 	switch m.viewMode {
@@ -555,8 +719,8 @@ func (m Model) toggleHostSelection() (tea.Model, tea.Cmd) {
 		hosts = m.getFilteredGroupHosts()
 	}
 
-	if len(hosts) > 0 && currentIndex < len(hosts) {
-		selectedHost := hosts[currentIndex]
+	if len(hosts) > 0 && globalIndex < len(hosts) {
+		selectedHost := hosts[globalIndex]
 
 		for i, host := range m.selectedHosts {
 			if host.Name == selectedHost.Name && host.Hostname == selectedHost.Hostname {
@@ -579,12 +743,14 @@ func (m Model) moveUp() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) moveDown() (tea.Model, tea.Cmd) {
-	rows, cols := m.getGridDimensions()
+	rows, cols := m.getPageGridDimensions()
 	if m.cursorRow < rows-1 {
-		index := m.getCurrentIndex()
-		itemCount := m.getCurrentItemCount()
-		if index+cols < itemCount {
-			m.cursorRow++
+
+		newRow := m.cursorRow + 1
+		newIndex := newRow*cols + m.cursorCol
+		pageItemCount := m.getCurrentPageItemCount()
+		if newIndex < pageItemCount {
+			m.cursorRow = newRow
 		}
 	}
 	return m, nil
@@ -598,13 +764,32 @@ func (m Model) moveLeft() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) moveRight() (tea.Model, tea.Cmd) {
-	_, cols := m.getGridDimensions()
+	_, cols := m.getPageGridDimensions()
 	if m.cursorCol < cols-1 {
-		index := m.getCurrentIndex()
-		itemCount := m.getCurrentItemCount()
-		if index+1 < itemCount {
-			m.cursorCol++
+
+		newCol := m.cursorCol + 1
+		newIndex := m.cursorRow*cols + newCol
+		pageItemCount := m.getCurrentPageItemCount()
+		if newIndex < pageItemCount {
+			m.cursorCol = newCol
 		}
+	}
+	return m, nil
+}
+
+func (m *Model) previousPage() (tea.Model, tea.Cmd) {
+	if m.currentPage > 0 {
+		m.currentPage--
+		m.resetCursor()
+	}
+	return m, nil
+}
+
+func (m *Model) nextPage() (tea.Model, tea.Cmd) {
+	totalPages := m.getTotalPages()
+	if m.currentPage < totalPages-1 {
+		m.currentPage++
+		m.resetCursor()
 	}
 	return m, nil
 }
@@ -626,22 +811,24 @@ func (m Model) getMaxCursor() int {
 }
 
 func (m Model) enterGroup() (tea.Model, tea.Cmd) {
-	currentIndex := m.getCurrentIndex()
-	if len(m.filteredGroups) == 0 || currentIndex >= len(m.filteredGroups) {
+	pageIndex := m.getCurrentIndex()
+	globalIndex := m.currentPage*m.itemsPerPage + pageIndex
+	if len(m.filteredGroups) == 0 || globalIndex >= len(m.filteredGroups) {
 		return m, nil
 	}
 
-	selectedGroup := m.filteredGroups[currentIndex]
+	selectedGroup := m.filteredGroups[globalIndex]
 	m.currentGroup = selectedGroup
 	m.viewMode = HostView
-	m.resetCursor()
+	m.resetCursorAndPage()
 	m.breadcrumb = append(m.breadcrumb, selectedGroup.Name)
 
 	return m, nil
 }
 
 func (m Model) selectHost() (tea.Model, tea.Cmd) {
-	currentIndex := m.getCurrentIndex()
+	pageIndex := m.getCurrentIndex()
+	globalIndex := m.currentPage*m.itemsPerPage + pageIndex
 	var hosts []*types.Host
 
 	switch m.viewMode {
@@ -651,8 +838,8 @@ func (m Model) selectHost() (tea.Model, tea.Cmd) {
 		hosts = m.getFilteredGroupHosts()
 	}
 
-	if len(hosts) > 0 && currentIndex < len(hosts) {
-		m.choice = hosts[currentIndex]
+	if len(hosts) > 0 && globalIndex < len(hosts) {
+		m.choice = hosts[globalIndex]
 		m.customUsername = ""
 		m.quitting = true
 		return m, tea.Quit
@@ -662,7 +849,8 @@ func (m Model) selectHost() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) selectHostWithUsername() (tea.Model, tea.Cmd) {
-	currentIndex := m.getCurrentIndex()
+	pageIndex := m.getCurrentIndex()
+	globalIndex := m.currentPage*m.itemsPerPage + pageIndex
 	var hosts []*types.Host
 
 	switch m.viewMode {
@@ -672,8 +860,8 @@ func (m Model) selectHostWithUsername() (tea.Model, tea.Cmd) {
 		hosts = m.getFilteredGroupHosts()
 	}
 
-	if len(hosts) > 0 && currentIndex < len(hosts) {
-		m.choice = hosts[currentIndex]
+	if len(hosts) > 0 && globalIndex < len(hosts) {
+		m.choice = hosts[globalIndex]
 		m.quitting = true
 		return m, tea.Quit
 	}
@@ -682,7 +870,7 @@ func (m Model) selectHostWithUsername() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) switchView() (tea.Model, tea.Cmd) {
-	m.resetCursor()
+	m.resetCursorAndPage()
 
 	switch m.viewMode {
 	case AllHostsView:
@@ -837,7 +1025,7 @@ func (m Model) backToGroups() (tea.Model, tea.Cmd) {
 		m.currentGroup = nil
 	}
 
-	m.resetCursor()
+	m.resetCursorAndPage()
 	return m, nil
 }
 
@@ -895,12 +1083,30 @@ func (m Model) View() string {
 		s += fmt.Sprintf("Bulk Selection Mode - %d hosts selected (Space: toggle, c: command)\n\n", len(m.selectedHosts))
 	}
 
+	totalPages := m.getTotalPages()
+	if totalPages > 1 {
+		paginationInfo := fmt.Sprintf("Page %d of %d", m.currentPage+1, totalPages)
+		s += helpStyle.Render(paginationInfo) + "\n\n"
+	}
+
 	switch m.viewMode {
 	case AllHostsView:
+		pageItems := m.getCurrentPageItems()
+		if hosts, ok := pageItems.([]*types.Host); ok {
+			return m.renderGridView(s, hosts, nil)
+		}
 		return m.renderGridView(s, m.filteredHosts, nil)
 	case GroupView:
+		pageItems := m.getCurrentPageItems()
+		if groups, ok := pageItems.([]*types.Group); ok {
+			return m.renderGridView(s, nil, groups)
+		}
 		return m.renderGridView(s, nil, m.filteredGroups)
 	case HostView:
+		pageItems := m.getCurrentPageItems()
+		if hosts, ok := pageItems.([]*types.Host); ok {
+			return m.renderGridView(s, hosts, nil)
+		}
 		hosts := m.getFilteredGroupHosts()
 		return m.renderGridView(s, hosts, nil)
 	case BulkCommandView:
@@ -923,7 +1129,14 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 		itemCount = len(groups)
 		for _, group := range groups {
 			hostCount := len(group.AllHosts())
-			items = append(items, fmt.Sprintf("%s (%d hosts)", group.Name, hostCount))
+
+			maxGroupNameLen := 40
+			groupName := group.Name
+			if len(groupName) > maxGroupNameLen {
+				groupName = groupName[:maxGroupNameLen-2] + ".."
+			}
+
+			items = append(items, fmt.Sprintf("%s (%d hosts)", groupName, hostCount))
 		}
 	}
 
@@ -950,15 +1163,16 @@ func (m Model) renderGridView(header string, hosts []*types.Host, groups []*type
 }
 
 func (m Model) renderGrid(items []string, itemCount, availableWidth int) string {
-	adjustedGridCols := m.calculateOptimalColumns(items, availableWidth)
 
-	rows := (itemCount + adjustedGridCols - 1) / adjustedGridCols
-	colWidths := m.calculateColumnWidths(items, rows, adjustedGridCols, availableWidth)
+	gridCols := m.calculateGridColumns()
+
+	rows := (itemCount + gridCols - 1) / gridCols
+	colWidths := m.calculateColumnWidths(items, rows, gridCols, availableWidth)
 
 	var content string
 	for row := 0; row < rows; row++ {
-		for col := 0; col < adjustedGridCols; col++ {
-			index := row*adjustedGridCols + col
+		for col := 0; col < gridCols; col++ {
+			index := row*gridCols + col
 			if index >= itemCount {
 				break
 			}
@@ -988,7 +1202,7 @@ func (m Model) renderGrid(items []string, itemCount, availableWidth int) string 
 
 			content += styledText
 
-			if col < adjustedGridCols-1 && index+1 < itemCount {
+			if col < gridCols-1 && index+1 < itemCount {
 				content += strings.Repeat(" ", padding+2)
 			}
 		}
@@ -1092,6 +1306,10 @@ func (m Model) getHelpText() string {
 
 	baseHelp += ", Tab: switch view, /: filter"
 
+	if m.getTotalPages() > 1 {
+		baseHelp += ", n/p: next/prev page"
+	}
+
 	if m.filterText != "" {
 		baseHelp += ", Esc: clear filter"
 	}
@@ -1109,7 +1327,8 @@ func (m Model) CustomUsername() string {
 }
 
 func (m Model) getCurrentHost() *types.Host {
-	currentIndex := m.getCurrentIndex()
+	pageIndex := m.getCurrentIndex()
+	globalIndex := m.currentPage*m.itemsPerPage + pageIndex
 	var hosts []*types.Host
 
 	switch m.viewMode {
@@ -1121,8 +1340,8 @@ func (m Model) getCurrentHost() *types.Host {
 		return nil
 	}
 
-	if len(hosts) > 0 && currentIndex < len(hosts) {
-		return hosts[currentIndex]
+	if len(hosts) > 0 && globalIndex < len(hosts) {
+		return hosts[globalIndex]
 	}
 	return nil
 }
