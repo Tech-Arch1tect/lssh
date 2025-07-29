@@ -11,7 +11,7 @@ A TUI-based CLI tool for managing and connecting to SSH servers with a pluggable
 - **Pluggable providers**: JSON files, Ansible inventories, and extensible architecture
 - **Automatic SSH connection** with user override support (press `u`)
 - **Caching layer** for improved performance with remote providers with no extra effort from the user
-- **Exclude patterns**: Hide specific groups or hosts using wildcard patterns
+- **Exclude patterns**: Hide groups/hosts using wildcard patterns with soft and hard exclusion modes
 
 ## Providers
 
@@ -56,6 +56,7 @@ Create a configuration file at `~/.config/lssh/config.json`:
     }
   ],
   "exclude_groups": ["Development", "test_*"],
+  "hard_exclude_groups": ["staging"],
   "exclude_hosts": ["web-*", "backup-server", "*-temp"],
   "cache_enabled": true
 }
@@ -67,27 +68,54 @@ Override configuration with environment variables:
 
 - `LSSH_HOSTS_FILE`: Override hosts file location
 - `LSSH_PROVIDER_TYPE`: Override provider type (json, ansible)
-- `LSSH_EXCLUDE_GROUPS`: Comma-separated list of group patterns to exclude
+- `LSSH_EXCLUDE_GROUPS`: Comma-separated list of group patterns for soft exclusion
+- `LSSH_HARD_EXCLUDE_GROUPS`: Comma-separated list of group patterns for hard exclusion
 - `LSSH_EXCLUDE_HOSTS`: Comma-separated list of host patterns to exclude
 - `LSSH_CACHE_ENABLED`: Enable/disable caching (true/false)
 - `XDG_CONFIG_HOME`: Override config directory
 
 ```bash
-# Example: Exclude development and test hosts
+# Example: Soft exclude groups (hide groups but keep duplicate hosts)
 export LSSH_EXCLUDE_GROUPS="Development,test_*"
+# Example: Hard exclude groups (remove groups and all duplicate hosts)
+export LSSH_HARD_EXCLUDE_GROUPS="staging"
 export LSSH_EXCLUDE_HOSTS="web-*,*-temp"
 lssh
 ```
 
 ### Exclude Patterns
 
-Use wildcard patterns to hide groups or hosts:
+LSSH supports two types of group exclusions:
 
+#### Soft Exclusion (`exclude_groups`)
+- **Behavior**: Hides the specified groups from the interface
+- **Duplicate hosts**: Hosts that appear in multiple groups remain accessible through non-excluded groups
+- **Use case**: Declutter the group view while preserving access to all hosts
+
+#### Hard Exclusion (`hard_exclude_groups`) 
+- **Behavior**: Removes groups AND any hosts that appeared in those groups
+- **Duplicate hosts**: Completely removes hosts from all views, even if they exist in non-excluded groups
+- **Use case**: Completely remove unwanted hosts from the interface
+
+#### Wildcard Pattern Support
 - `*` matches any sequence of characters
 - `web-*` matches `web-01`, `web-02`, etc.
 - `*-temp` matches `server-temp`, `db-temp`, etc.
 - `test_*` matches `test_group`, `test_env`, etc.
 - Exact matches work without wildcards: `backup-server`
+
+#### Examples
+```bash
+# Soft exclusion: Hide "Development" group but keep duplicate hosts
+export LSSH_EXCLUDE_GROUPS="Development"
+
+# Hard exclusion: Remove "Development" group and all its hosts everywhere
+export LSSH_HARD_EXCLUDE_GROUPS="Development"
+
+# Combined: Hide staging groups, completely remove test hosts
+export LSSH_EXCLUDE_GROUPS="staging_*"
+export LSSH_HARD_EXCLUDE_GROUPS="test_*"
+```
 
 Environment variables take precedence over config file settings.
 

@@ -168,11 +168,20 @@ func (m Model) loadData() tea.Cmd {
 	return tea.Cmd(func() tea.Msg {
 		var allGroups []*types.Group
 		var allHosts []*types.Host
+		excludedHostKeys := make(map[string]bool)
 
 		for _, p := range m.providers {
 			groups, err := p.GetGroups(context.Background())
 			if err != nil {
 				return dataLoadedMsg{err: fmt.Errorf("failed to load data from %s: %w", p.Name(), err)}
+			}
+
+			for _, group := range groups {
+				if m.config != nil && m.config.IsGroupExcluded(group.Name, config.HardExclude) {
+					for _, host := range group.AllHosts() {
+						excludedHostKeys[m.hostKey(host)] = true
+					}
+				}
 			}
 
 			filteredGroups := m.filterGroups(groups)
@@ -184,7 +193,14 @@ func (m Model) loadData() tea.Cmd {
 			}
 		}
 
-		deduplicatedHosts := m.deduplicateHosts(allHosts)
+		var finalHosts []*types.Host
+		for _, host := range allHosts {
+			if !excludedHostKeys[m.hostKey(host)] {
+				finalHosts = append(finalHosts, host)
+			}
+		}
+
+		deduplicatedHosts := m.deduplicateHosts(finalHosts)
 		return dataLoadedMsg{groups: allGroups, hosts: deduplicatedHosts}
 	})
 }
@@ -1482,7 +1498,7 @@ func (m Model) filterGroups(groups []*types.Group) []*types.Group {
 
 	var filtered []*types.Group
 	for _, group := range groups {
-		if !m.config.IsGroupExcluded(group.Name) {
+		if !m.config.IsGroupExcluded(group.Name, config.SoftExclude) && !m.config.IsGroupExcluded(group.Name, config.HardExclude) {
 			filteredGroup := *group
 			filteredGroup.Hosts = m.filterHosts(group.Hosts)
 			if len(filteredGroup.Hosts) > 0 || len(group.SubGroups) > 0 {
