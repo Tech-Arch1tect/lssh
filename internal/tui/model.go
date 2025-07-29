@@ -450,20 +450,13 @@ func (m Model) formatHostItems(hosts []*types.Host) []string {
 			}
 		}
 
-		maxNameLen := 25
-		maxHostnameLen := 30
-
+		maxNameLen := 40
 		name := host.Name
 		if len(name) > maxNameLen {
 			name = name[:maxNameLen-2] + ".."
 		}
 
-		hostname := host.Hostname
-		if len(hostname) > maxHostnameLen {
-			hostname = hostname[:maxHostnameLen-2] + ".."
-		}
-
-		items = append(items, fmt.Sprintf("%s%s (%s)", prefix, name, hostname))
+		items = append(items, fmt.Sprintf("%s%s", prefix, name))
 	}
 	return items
 }
@@ -536,7 +529,7 @@ func (m Model) calculateGridColumns() int {
 	if len(items) == 0 {
 		switch m.viewMode {
 		case AllHostsView, HostView:
-			items = []string{"sample-host-name-1234567 (hostname.example.com.longnm..)"}
+			items = []string{"sample-host-name-1234567890123456789"}
 		case GroupView:
 			items = []string{"Sample Group Name That Is Quite Long.. (99 hosts)"}
 		}
