@@ -184,7 +184,8 @@ func (m Model) loadData() tea.Cmd {
 			}
 		}
 
-		return dataLoadedMsg{groups: allGroups, hosts: allHosts}
+		deduplicatedHosts := m.deduplicateHosts(allHosts)
+		return dataLoadedMsg{groups: allGroups, hosts: deduplicatedHosts}
 	})
 }
 
@@ -1511,4 +1512,41 @@ func (m Model) filterHosts(hosts []*types.Host) []*types.Host {
 		}
 	}
 	return filtered
+}
+
+func (m Model) deduplicateHosts(hosts []*types.Host) []*types.Host {
+	seen := make(map[string]*types.Host)
+	var result []*types.Host
+
+	for _, host := range hosts {
+		key := m.hostKey(host)
+		if existing, exists := seen[key]; !exists {
+			seen[key] = host
+			result = append(result, host)
+		} else if existing.Name != host.Name && host.Name < existing.Name {
+			for i, h := range result {
+				if h == existing {
+					result[i] = host
+					seen[key] = host
+					break
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+func (m Model) hostKey(host *types.Host) string {
+	port := 22
+	if host.Port > 0 {
+		port = host.Port
+	}
+
+	user := ""
+	if host.User != "" {
+		user = host.User
+	}
+
+	return fmt.Sprintf("%s:%d:%s", host.Hostname, port, user)
 }
