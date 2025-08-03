@@ -124,6 +124,12 @@ func NewModelWithError(providers []provider.Provider, cfg *config.Config, err er
 	return newModelWithError(providers, cfg, err)
 }
 
+func NewModelWithErrorAndFilter(providers []provider.Provider, cfg *config.Config, err error, filterText string) Model {
+	m := newModelWithError(providers, cfg, err)
+	m.filterText = filterText
+	return m
+}
+
 func newModelWithError(providers []provider.Provider, cfg *config.Config, err error) Model {
 	m := Model{
 		providers:         providers,
@@ -158,9 +164,6 @@ func newModelWithError(providers []provider.Provider, cfg *config.Config, err er
 }
 
 func (m Model) Init() tea.Cmd {
-	if m.err != nil {
-		return nil
-	}
 	return m.loadData()
 }
 
@@ -220,8 +223,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.quitting = true
 				return m, tea.Quit
 			} else {
-				m.quitting = true
-				return m, tea.Quit
+				m.err = nil
+				return m, nil
 			}
 		}
 
@@ -1353,6 +1356,10 @@ func (m Model) Choice() *types.Host {
 
 func (m Model) CustomUsername() string {
 	return m.customUsername
+}
+
+func (m Model) FilterText() string {
+	return m.filterText
 }
 
 func (m Model) getCurrentHost() *types.Host {

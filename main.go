@@ -68,10 +68,11 @@ func run() error {
 				} else {
 					fmt.Printf("Connecting to %s (%s)...\n", choice.Name, choice.Hostname)
 				}
+				filterText := m.FilterText()
 				sshErr := ssh.ConnectWithUser(choice, customUser)
 
 				if sshErr != nil {
-					model = tui.NewModelWithError(providers, cfg, sshErr)
+					model = tui.NewModelWithErrorAndFilter(providers, cfg, sshErr, filterText)
 				} else {
 					model = tui.NewModel(providers, cfg)
 				}
