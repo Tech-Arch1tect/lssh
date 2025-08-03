@@ -47,6 +47,10 @@ func run() error {
 		providers = append(providers, p)
 	}
 
+	if err := cache.CheckExpiredCaches(providers); err != nil {
+		return fmt.Errorf("failed to check expired caches: %w", err)
+	}
+
 	model := tui.NewModel(providers, cfg)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 

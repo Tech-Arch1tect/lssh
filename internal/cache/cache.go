@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tech-arch1tect/lssh/pkg/provider"
@@ -15,11 +17,12 @@ import (
 )
 
 type CachedProvider struct {
-	provider     provider.Provider
-	providerType string
-	filePath     string
-	cacheDir     string
-	ttl          time.Duration
+	provider        provider.Provider
+	providerType    string
+	filePath        string
+	cacheDir        string
+	ttl             time.Duration
+	useExpiredCache bool
 }
 
 type cacheEntry struct {
@@ -32,11 +35,12 @@ func NewCachedProvider(p provider.Provider, providerType, filePath string) *Cach
 	ttl := getCacheTTL()
 
 	return &CachedProvider{
-		provider:     p,
-		providerType: providerType,
-		filePath:     filePath,
-		cacheDir:     cacheDir,
-		ttl:          ttl,
+		provider:        p,
+		providerType:    providerType,
+		filePath:        filePath,
+		cacheDir:        cacheDir,
+		ttl:             ttl,
+		useExpiredCache: false,
 	}
 }
 
@@ -49,7 +53,7 @@ func (cp *CachedProvider) GetGroups(ctx context.Context) ([]*types.Group, error)
 	cacheFile := filepath.Join(cp.cacheDir, cacheKey+".json")
 
 	if entry, err := cp.loadFromCache(cacheFile); err == nil {
-		if time.Since(entry.Timestamp) < cp.ttl {
+		if time.Since(entry.Timestamp) < cp.ttl || cp.useExpiredCache {
 			return entry.Groups, nil
 		}
 	}
@@ -167,6 +171,43 @@ func ClearCache() error {
 
 	if len(deleteErrors) > 0 {
 		return fmt.Errorf("some cache files could not be deleted:\n%s", filepath.Join(deleteErrors...))
+	}
+
+	return nil
+}
+
+func CheckExpiredCaches(providers []provider.Provider) error {
+	cacheDir := getCacheDir()
+	ttl := getCacheTTL()
+
+	for _, p := range providers {
+		if cp, ok := p.(*CachedProvider); ok {
+			cacheKey := cp.getCacheKey()
+			cacheFile := filepath.Join(cacheDir, cacheKey+".json")
+
+			if entry, err := cp.loadFromCache(cacheFile); err == nil {
+				if time.Since(entry.Timestamp) >= ttl {
+					age := time.Since(entry.Timestamp)
+					fmt.Printf("Cache for %s expired %v ago.\n", cp.provider.Name(), age.Round(time.Minute))
+					fmt.Print("Use expired cache? [y/N]: ")
+
+					reader := bufio.NewReader(os.Stdin)
+					response, err := reader.ReadString('\n')
+					if err != nil {
+						continue
+					}
+
+					response = strings.TrimSpace(strings.ToLower(response))
+					if response == "y" || response == "yes" {
+						cp.useExpiredCache = true
+					} else {
+						if err := os.Remove(cacheFile); err != nil {
+							fmt.Printf("Warning: Could not remove expired cache: %v\n", err)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	return nil
