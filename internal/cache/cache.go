@@ -59,7 +59,15 @@ func (cp *CachedProvider) GetGroups(ctx context.Context) ([]*types.Group, error)
 		return nil, err
 	}
 
-	cp.saveToCache(cacheFile, groups)
+	totalHosts := 0
+	for _, group := range groups {
+		totalHosts += len(group.AllHosts())
+	}
+
+	if totalHosts > 0 {
+		cp.saveToCache(cacheFile, groups)
+	}
+
 	return groups, nil
 }
 

@@ -36,5 +36,14 @@ func (p *JSONProvider) GetGroups(ctx context.Context) ([]*types.Group, error) {
 		return nil, fmt.Errorf("failed to parse JSON file %s: %w", p.filepath, err)
 	}
 
+	totalHosts := 0
+	for _, group := range groups {
+		totalHosts += len(group.AllHosts())
+	}
+
+	if totalHosts == 0 {
+		return nil, fmt.Errorf("no hosts found in JSON file %s", p.filepath)
+	}
+
 	return groups, nil
 }

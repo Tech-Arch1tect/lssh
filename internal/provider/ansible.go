@@ -114,5 +114,14 @@ func (p *AnsibleProvider) GetGroups(ctx context.Context) ([]*types.Group, error)
 		}
 	}
 
+	totalHosts := 0
+	for _, group := range groups {
+		totalHosts += len(group.AllHosts())
+	}
+
+	if totalHosts == 0 {
+		return nil, fmt.Errorf("no hosts found in Ansible inventory %s", p.filepath)
+	}
+
 	return groups, nil
 }
