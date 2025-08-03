@@ -134,7 +134,7 @@ func getCacheDir() string {
 func getCacheTTL() time.Duration {
 	ttlStr := os.Getenv("LSSH_CACHE_TTL")
 	if ttlStr == "" {
-		return 24 * time.Hour
+		return 7 * 24 * time.Hour
 	}
 
 	if hours, err := strconv.Atoi(ttlStr); err == nil {
@@ -145,7 +145,7 @@ func getCacheTTL() time.Duration {
 		return duration
 	}
 
-	return 24 * time.Hour
+	return 7 * 24 * time.Hour
 }
 
 func ClearCache() error {
