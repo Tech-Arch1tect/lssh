@@ -655,6 +655,21 @@ func (m Model) handleFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.filterMode = false
 		return m, nil
+	case "up", "k":
+		m.filterMode = false
+		return m.moveUp()
+	case "down", "j":
+		m.filterMode = false
+		return m.moveDown()
+	case "left", "h":
+		m.filterMode = false
+		if m.viewMode == HostView && m.cursorCol == 0 {
+			return m.backToGroups()
+		}
+		return m.moveLeft()
+	case "right", "l":
+		m.filterMode = false
+		return m.moveRight()
 	case "backspace":
 		if len(m.filterText) > 0 {
 			m.filterText = m.filterText[:len(m.filterText)-1]
