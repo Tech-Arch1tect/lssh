@@ -1,10 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tech-arch1tect/lssh/internal/cache"
 	"github.com/tech-arch1tect/lssh/internal/config"
 	"github.com/tech-arch1tect/lssh/internal/provider"
 	"github.com/tech-arch1tect/lssh/internal/ssh"
@@ -12,6 +14,18 @@ import (
 )
 
 func main() {
+	clearCache := flag.Bool("clear-cache", false, "Clear all cached provider data")
+	flag.Parse()
+
+	if *clearCache {
+		if err := cache.ClearCache(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error clearing cache: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Cache cleared successfully")
+		return
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

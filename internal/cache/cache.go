@@ -143,3 +143,31 @@ func getCacheTTL() time.Duration {
 
 	return 24 * time.Hour
 }
+
+func ClearCache() error {
+	cacheDir := getCacheDir()
+
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read cache directory: %w", err)
+	}
+
+	var deleteErrors []string
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+			filePath := filepath.Join(cacheDir, entry.Name())
+			if err := os.Remove(filePath); err != nil {
+				deleteErrors = append(deleteErrors, fmt.Sprintf("failed to delete %s: %v", entry.Name(), err))
+			}
+		}
+	}
+
+	if len(deleteErrors) > 0 {
+		return fmt.Errorf("some cache files could not be deleted:\n%s", filepath.Join(deleteErrors...))
+	}
+
+	return nil
+}
