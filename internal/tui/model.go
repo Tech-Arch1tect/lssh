@@ -220,9 +220,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.quitting = true
 				return m, tea.Quit
 			} else {
-				m.err = nil
-				m.loading = true
-				return m, m.loadData()
+				m.quitting = true
+				return m, tea.Quit
 			}
 		}
 
